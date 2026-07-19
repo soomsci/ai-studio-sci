@@ -1,0 +1,57 @@
+rules_version = '2';
+
+// 과학 데이터 스튜디오 — Firestore 보안 규칙 (세션 A)
+// 요지 (SPEC §5.4):
+//   - 인증되지 않은 접근은 전면 차단 (기본값이 거부이므로 별도 허용이 없으면 막힘)
+//   - datasets 읽기: 인증된 사용자 (학급 비교 기능에 필요)
+//   - datasets 쓰기: 생성은 인증된 사용자, 수정·삭제는 본인(ownerUid) 또는 교사
+//   - classes 문서 수정: 교사만
+//
+// 한계: 익명 인증에는 "어느 학급 소속인지" 증명이 없어서,
+// 학급 코드를 아는(=로그인한) 사용자는 다른 학급 문서도 읽을 수는 있다.
+// 학급 코드를 외부에 공개하지 않는 것으로 보완한다.
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    // 해당 학급의 교사인가 (classes 문서의 teacherUid와 비교)
+    function isTeacherOf(classId) {
+      return signedIn()
+        && get(/databases/$(database)/documents/classes/$(classId)).data.teacherUid == request.auth.uid;
+    }
+
+    match /classes/{classId} {
+      // 학급 코드 조회(입장)와 학급 이름 표시에 필요
+      allow read: if signedIn();
+      // 학급 생성·수정·삭제는 교사만
+      allow create: if signedIn() && request.resource.data.teacherUid == request.auth.uid;
+      allow update, delete: if isTeacherOf(classId);
+
+      match /groups/{groupId} {
+        allow read: if signedIn();
+        allow write: if isTeacherOf(classId);
+      }
+
+      match /datasets/{datasetId} {
+        allow read: if signedIn();
+        // 만들 때는 자기 uid를 ownerUid로 적어야 한다
+        allow create: if signedIn() && request.resource.data.ownerUid == request.auth.uid;
+        // 고치거나 지우는 건 만든 본인 또는 교사만
+        allow update, delete: if signedIn()
+          && (resource.data.ownerUid == request.auth.uid || isTeacherOf(classId));
+      }
+
+      match /analyses/{analysisId} {
+        allow read: if signedIn();
+        // 분석은 모둠이 자유롭게 쓰고 고친다
+        allow create, update: if signedIn();
+        // 삭제는 교사만 (실수로 모둠 분석이 날아가는 것 방지)
+        allow delete: if isTeacherOf(classId);
+      }
+    }
+  }
+}
