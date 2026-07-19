@@ -1,0 +1,4 @@
+# 설치: pip install -r requirements.txt  (Python 3.11 권장 — pasco 라이브러리 요구사항)
+flask>=3.0
+pasco>=1.0
+firebase-admin>=6.5
