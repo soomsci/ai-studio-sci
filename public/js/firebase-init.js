@@ -8,12 +8,12 @@
 // 연습 모드에서는 서버 없이 가짜 데이터(mock)로 모든 화면을 써 볼 수 있습니다.
 
 const firebaseConfig = {
-  apiKey: "",             // ← 여기에 붙여 넣기
-  authDomain: "",
-  projectId: "",
-  storageBucket: "",
-  messagingSenderId: "",
-  appId: "",
+  apiKey: "AIzaSyD-pHX9H7Yle0E5LwCjCz_r89WSIsbjXlw",
+  authDomain: "ai-science-data-studio.firebaseapp.com",
+  projectId: "ai-science-data-studio",
+  storageBucket: "ai-science-data-studio.firebasestorage.app",
+  messagingSenderId: "640183237451",
+  appId: "1:640183237451:web:6db373d761fcf9572bc6ce",
 };
 
 // 설정이 채워졌는지 여부. false면 연습 모드.
