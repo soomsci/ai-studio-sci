@@ -4,114 +4,65 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>우리 반 데이터 스튜디오</title>
+  <script>
+    // 입장 정보가 없으면 입장 페이지로 보낸다.
+    // (화면이 잠깐 보였다 사라지는 깜빡임을 막으려고 머리에서 바로 검사한다.
+    //  키 이름은 js/auth.js의 KEYS와 같아야 한다.)
+    if (!(localStorage.getItem("sds:classId") && localStorage.getItem("sds:groupNo"))) {
+      location.replace("./join.html");
+    }
+  </script>
   <link rel="stylesheet" href="./css/style.css">
+  <!-- Firebase 설정값 (커밋되지 않는 파일 — 없으면 연습 모드) -->
+  <script src="./js/firebase-config.js"></script>
   <!-- 유일하게 허용된 외부 라이브러리: Chart.js (CDN) -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.js"></script>
 </head>
 <body>
 
-  <!-- 입장 화면: 학급 코드 + 모둠 선택 (최초 1회) -->
-  <section id="join-screen" class="join-screen" hidden>
-    <div class="join-card">
-      <h1>🔬 우리 반 데이터 스튜디오</h1>
-      <p class="join-lead">선생님이 알려 준 학급 코드를 넣고 시작해요.</p>
-      <p id="join-mock-notice" class="mock-notice" hidden>
-        🧪 지금은 연습 모드예요. 아무 코드나 넣어도 들어갈 수 있어요.
-      </p>
-      <label for="join-code">학급 코드</label>
-      <input id="join-code" type="text" placeholder="예: 3B-2026" autocomplete="off">
-      <label>우리 모둠</label>
-      <div id="join-groups" class="join-groups"></div>
-      <p id="join-error" class="join-error" hidden></p>
-      <button id="join-btn" class="btn big">시작하기</button>
+  <header class="topbar">
+    <div class="topbar-title">우리 반 데이터 스튜디오</div>
+    <div class="topbar-right">
+      <span id="who-label"></span>
+      <button id="leave-btn" class="btn tiny ghost" title="학급을 잘못 골랐을 때 눌러요">나가기</button>
     </div>
-  </section>
-
-  <!-- 본 화면 -->
-  <div id="app" hidden>
-    <header class="topbar">
-      <div class="topbar-title">우리 반 데이터 스튜디오</div>
-      <div class="topbar-right">
-        <span id="who-label"></span>
-        <button id="leave-btn" class="btn tiny ghost" title="학급을 잘못 골랐을 때 눌러요">나가기</button>
-      </div>
-    </header>
-    <nav id="tab-nav" class="tab-nav"></nav>
-    <main id="outlet" class="outlet"></main>
-  </div>
+  </header>
+  <nav id="tab-nav" class="tab-nav"></nav>
+  <main id="outlet" class="outlet"></main>
 
   <script type="module">
-    // 앱 시동 (세션 A). 화면 전환·탭 등록만 하고, 내용은 각 모듈이 담당한다.
-    import { isConfigured } from "./js/firebase-init.js";
-    import { getSession, join, leave } from "./js/auth.js";
+    // 본 화면 시동 (세션 A). 탭 등록·라우팅만 하고, 내용은 각 모듈이 담당한다.
+    import { getSession, leave } from "./js/auth.js";
     import { registerTab, startRouter } from "./js/router.js";
     import { mount as mountHome } from "./js/home.js";
 
-    const $ = (id) => document.getElementById(id);
+    const session = getSession();
+    if (!session) {
+      // 머리의 검사를 지나쳤어도 여기서 한 번 더 막는다
+      location.replace("./join.html");
+    } else {
+      document.getElementById("who-label").textContent =
+        (session.className || "우리 학급") + " · " + session.groupName;
 
-    // ── 탭 등록 ──
-    registerTab("home", { label: "🏠 홈", mount: mountHome });
-    // 실험 탭은 자리만 먼저 잡고, 모듈 파일이 있으면 이어서 연결한다 (세션 B·C·D 담당)
-    const expTabs = [["exp1", "💨 환기 주기"], ["exp2", "🌱 식물 광합성"], ["exp3", "🏃 운동과 몸"]];
-    for (const [id, label] of expTabs) {
-      registerTab(id, { label });
-      import(`./js/${id}.js`)
-        .then((m) => registerTab(id, { label, mount: m.mount }))
-        .catch(() => { /* 아직 없는 탭 — "준비 중" 화면이 나온다 */ });
-    }
-
-    // ── 입장 화면 ↔ 본 화면 전환 ──
-    function refresh() {
-      const session = getSession();
-      $("join-screen").hidden = !!session;
-      $("app").hidden = !session;
-      if (session) {
-        $("who-label").textContent =
-          (session.className || "우리 학급") + " · " + session.groupName;
-        startRouter({ nav: $("tab-nav"), outlet: $("outlet") });
+      // ── 탭 등록 ──
+      registerTab("home", { label: "🏠 홈", mount: mountHome });
+      // 실험 탭은 자리만 먼저 잡고, 모듈 파일이 있으면 이어서 연결한다 (세션 B·C·D 담당)
+      const expTabs = [["exp1", "💨 환기 주기"], ["exp2", "🌱 식물 광합성"], ["exp3", "🏃 운동과 몸"]];
+      for (const [id, label] of expTabs) {
+        registerTab(id, { label });
+        import(`./js/${id}.js`)
+          .then((m) => registerTab(id, { label, mount: m.mount }))
+          .catch(() => { /* 아직 없는 탭 — "준비 중" 화면이 나온다 */ });
       }
-    }
+      startRouter({ nav: document.getElementById("tab-nav"), outlet: document.getElementById("outlet") });
 
-    // 모둠 선택 버튼 (1~6모둠)
-    let pickedGroup = 0;
-    const groupsEl = $("join-groups");
-    for (let n = 1; n <= 6; n++) {
-      const b = document.createElement("button");
-      b.type = "button";
-      b.className = "group-btn";
-      b.textContent = n + "모둠";
-      b.addEventListener("click", () => {
-        pickedGroup = n;
-        groupsEl.querySelectorAll("button").forEach((x) => x.classList.toggle("picked", x === b));
+      document.getElementById("leave-btn").addEventListener("click", () => {
+        if (confirm("학급에서 나갈까요? 다시 들어오려면 학급 코드가 필요해요.")) {
+          leave();
+          location.href = "./join.html";
+        }
       });
-      groupsEl.append(b);
     }
-
-    $("join-mock-notice").hidden = isConfigured;
-    $("join-btn").addEventListener("click", async () => {
-      const errEl = $("join-error");
-      errEl.hidden = true;
-      $("join-btn").disabled = true;
-      try {
-        await join($("join-code").value, pickedGroup);
-        refresh();
-      } catch (err) {
-        errEl.textContent = err.message;
-        errEl.hidden = false;
-      } finally {
-        $("join-btn").disabled = false;
-      }
-    });
-
-    $("leave-btn").addEventListener("click", () => {
-      if (confirm("학급에서 나갈까요? 다시 들어오려면 학급 코드가 필요해요.")) {
-        leave();
-        location.hash = "";
-        location.reload();
-      }
-    });
-
-    refresh();
   </script>
 </body>
 </html>

@@ -118,7 +118,7 @@ async function onMakePractice() {
   const cond = rootEl.querySelector("#exp1-cond").value;
   try {
     msgEl.textContent = "만드는 중…";
-    const { generateMock } = await import("../../mock/mock-data.js");
+    const { generateMock } = await import("../mock/mock-data.js");
     const ds = generateMock(EXP1.expNo, cond);
     ds.groupId = session.groupId;
     await saveDataset(ds);

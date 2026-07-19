@@ -1,7 +1,8 @@
-// mock/mock-data.js — 실험별 가짜 데이터 생성기 (세션 A)
+// public/mock/mock-data.js — 실험별 가짜 데이터 생성기 (세션 A)
+// (Firebase Hosting이 public/만 배포하므로 public/ 안에 둔다)
 //
-// 사용법:
-//   import { generateMock } from "../../mock/mock-data.js";
+// 사용법 (public/js/ 안의 파일 기준):
+//   import { generateMock } from "../mock/mock-data.js";
 //   const dataset = generateMock(1, "창문 닫음");
 //
 // 반환값은 docs/SPEC.md §5의 datasets 문서와 같은 형태다.

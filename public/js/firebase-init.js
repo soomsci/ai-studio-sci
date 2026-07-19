@@ -1,20 +1,20 @@
 // js/firebase-init.js — Firebase 초기화 (세션 A)
 //
-// ★ 설정값 채우는 방법 ★
-// Firebase 콘솔 → 프로젝트 설정 → 내 앱 → SDK 설정에서 값을 복사해
-// 아래 빈 따옴표 안에 붙여 넣으면 됩니다. 코드 다른 곳은 건드릴 필요 없습니다.
+// ★ 설정값은 이 파일에 쓰지 않는다 ★
+// 실제 설정값은 js/firebase-config.js에 두고, 그 파일은 .gitignore에 올라 있어
+// GitHub에 커밋되지 않는다 (CLAUDE.md 절대 규칙 7).
 //
-// 설정값이 비어 있으면 앱 전체가 자동으로 "연습 모드"로 돌아갑니다.
-// 연습 모드에서는 서버 없이 가짜 데이터(mock)로 모든 화면을 써 볼 수 있습니다.
+// 처음 설정하는 방법:
+//   1. js/firebase-config.example.js를 복사해 js/firebase-config.js로 저장
+//   2. Firebase 콘솔 → 프로젝트 설정 → 내 앱에서 값을 복사해 채우기
+//
+// firebase-config.js는 index.html·join.html이 <script> 태그로 먼저 불러온다.
+// (teacher.html을 만드는 세션 E도 같은 태그를 넣어야 한다)
+// 파일이 없으면 404가 나며 설정이 비고, 앱은 "연습 모드"로 돌아간다 —
+// 서버 없이 가짜 데이터로 모든 화면을 써 볼 수 있는 상태다.
 
-const firebaseConfig = {
-  apiKey: "AIzaSyD-pHX9H7Yle0E5LwCjCz_r89WSIsbjXlw",
-  authDomain: "ai-science-data-studio.firebaseapp.com",
-  projectId: "ai-science-data-studio",
-  storageBucket: "ai-science-data-studio.firebasestorage.app",
-  messagingSenderId: "640183237451",
-  appId: "1:640183237451:web:6db373d761fcf9572bc6ce",
-};
+const firebaseConfig =
+  (typeof window !== "undefined" && window.__FIREBASE_CONFIG__) || {};
 
 // 설정이 채워졌는지 여부. false면 연습 모드.
 export const isConfigured = Boolean(firebaseConfig.apiKey && firebaseConfig.projectId);

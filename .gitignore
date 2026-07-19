@@ -1,0 +1,17 @@
+# macOS 시스템 파일
+.DS_Store
+
+# Firebase 실제 설정값 — 커밋 금지 (CLAUDE.md 절대 규칙 7)
+# 본보기는 public/js/firebase-config.example.js
+public/js/firebase-config.js
+
+# 관리자 열쇠(서비스 계정 키) — 절대 커밋 금지 (수집기가 쓸 예정, 세션 F)
+serviceAccount*.json
+*-service-account*.json
+collector/*.json
+
+# 파이썬 (수집기)
+__pycache__/
+*.pyc
+collector/dist/
+collector/build/

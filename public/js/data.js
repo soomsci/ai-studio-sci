@@ -27,7 +27,7 @@ function seedMemory() {
 }
 
 async function fillSeeds() {
-  const { generateMock } = await import("../../mock/mock-data.js");
+  const { generateMock } = await import("../mock/mock-data.js");
   const my = getSession()?.groupId || "g1";
   const other = my === "g2" ? "g3" : "g2"; // 학급 비교 화면 확인용 다른 모둠
   const seeds = [

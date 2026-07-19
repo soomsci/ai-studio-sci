@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>입장하기 — 우리 반 데이터 스튜디오</title>
+  <link rel="stylesheet" href="./css/style.css">
+  <!-- Firebase 설정값 (커밋되지 않는 파일 — 없으면 연습 모드) -->
+  <script src="./js/firebase-config.js"></script>
+</head>
+<body>
+
+  <section class="join-screen">
+    <div class="join-card">
+      <h1>🔬 우리 반 데이터 스튜디오</h1>
+      <p class="join-lead">선생님이 알려 준 학급 코드를 넣고 시작해요.</p>
+      <p id="join-mock-notice" class="mock-notice" hidden>
+        🧪 지금은 연습 모드예요. 아무 코드나 넣어도 들어갈 수 있어요.
+      </p>
+      <label for="join-code">학급 코드</label>
+      <input id="join-code" type="text" placeholder="예: 3B-2026" autocomplete="off">
+      <label>우리 모둠</label>
+      <div id="join-groups" class="join-groups"></div>
+      <p id="join-error" class="join-error" hidden></p>
+      <button id="join-btn" class="btn big">시작하기</button>
+    </div>
+  </section>
+
+  <script type="module">
+    // 입장 페이지 (세션 A). 입장에 성공하면 index.html(홈)로 실제 페이지 이동한다.
+    import { isConfigured } from "./js/firebase-init.js";
+    import { getSession, join } from "./js/auth.js";
+
+    // 이미 입장한 학생은 곧바로 홈으로
+    if (getSession()) {
+      location.replace("./index.html");
+    }
+
+    const $ = (id) => document.getElementById(id);
+
+    // 모둠 선택 버튼 (1~6모둠)
+    let pickedGroup = 0;
+    const groupsEl = $("join-groups");
+    for (let n = 1; n <= 6; n++) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "group-btn";
+      b.textContent = n + "모둠";
+      b.addEventListener("click", () => {
+        pickedGroup = n;
+        groupsEl.querySelectorAll("button").forEach((x) => x.classList.toggle("picked", x === b));
+      });
+      groupsEl.append(b);
+    }
+
+    $("join-mock-notice").hidden = isConfigured;
+    $("join-btn").addEventListener("click", async () => {
+      const errEl = $("join-error");
+      errEl.hidden = true;
+      $("join-btn").disabled = true;
+      try {
+        await join($("join-code").value, pickedGroup);
+        location.href = "./index.html"; // 입장 성공 → 홈으로 이동
+      } catch (err) {
+        errEl.textContent = err.message;
+        errEl.hidden = false;
+        $("join-btn").disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>
