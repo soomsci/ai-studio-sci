@@ -5,13 +5,15 @@
 //   ② 우리 모둠 측정 목록 + 연습 데이터 만들기 + 분석에 쓸 측정 고르기 (exp1과 동일 패턴)
 //   ③ 분석 5단계 (steps.js의 renderSteps) — 주제에 따라 산점도/선그래프로 갈라진다
 //
-// 지금 이 파일은 "화면 골격" 단계다. 그래프·자동 계산·학급 분포 비교는
-// 다음 단계(기능 연결)에서 채운다. 여기서는 자리만 잡아 둔다.
+// 주제①(운동 강도-심박수)은 측정 1건 = 점 1개인 산점도, 주제②(회복 속도)는
+// exp1과 같은 선그래프다. 기준선 대신 "학급 평균선"을 쓰고(§10.3), 산점도에는
+// 학급 전체를 익명으로 겹쳐 보는 토글이 있다(절대 규칙 2·3 — 모둠 단위로만 비교).
 //
 // 문구·질문·그래프 설정은 전부 config/exp3.config.js에 있다.
 
 import { EXP3, TOPICS } from "../config/exp3.config.js";
-import { listDatasets, saveDataset, getAnalysis, saveAnalysis } from "./data.js";
+import { listDatasets, listClassDatasets, saveDataset, getAnalysis, saveAnalysis } from "./data.js";
+import { renderChart } from "./chart-kit.js";
 import { renderSteps } from "./steps.js";
 import { getSession } from "./auth.js";
 
@@ -20,11 +22,13 @@ let rootEl = null;
 let session = null;
 let datasets = [];
 let analysis = null;
+let slots = {};   // 단계별 render 훅이 그린 자리 — 측정 선택이 바뀌면 다시 그린다
 
 // ── 탭 진입점 (router.js 규약) ─────────────────────────────
 export async function mount(containerEl) {
   rootEl = containerEl;
   session = getSession();
+  slots = {};
   injectStyle();
 
   containerEl.innerHTML = `
@@ -158,7 +162,7 @@ function renderDatasetList(listEl, topic) {
         ? [...analysis.datasetIds, id]
         : analysis.datasetIds.filter((x) => x !== id);
       await saveAnalysis(analysis);
-      // 골격 단계: 단계 안 그래프 다시 그리기는 다음 단계(기능 연결)에서 채운다
+      refreshSlots(topic); // 열려 있는 단계의 그래프·표를 새로 그린다
     });
   });
 }
@@ -181,28 +185,203 @@ async function onMakePractice(topic) {
   }
 }
 
-// ── 분석 5단계 — 주제별 steps에 render 훅 자리만 끼운다 (골격 단계) ──
+// ── 분석 5단계 — 주제별 steps에 render 훅을 끼운다 ──────────
 function buildSteps(topic) {
-  const hooks = {
-    s2: (slotEl) => renderPlaceholderChart(slotEl, topic),
-    s3: (slotEl) => renderPlaceholderChart(slotEl, topic),
-  };
+  const hooks = { s2: renderStep2Chart, s3: renderStep3Chart };
   return topic.steps.map((step) => {
     const hook = hooks[step.id];
     if (!hook) return step; // 1·4·5단계는 글로만 답한다
-    return { ...step, render: hook };
+    return {
+      ...step,
+      render: (slotEl) => {
+        slots[step.id] = slotEl;
+        hook(slotEl, topic);
+      },
+    };
   });
 }
 
-// 그래프·자동 계산 자리 — 다음 단계(기능 연결)에서 chart-kit.renderChart로 채운다
-function renderPlaceholderChart(slotEl, topic) {
-  const kind = topic.chartMode === "scatter" ? "산점도" : "선그래프(회복 곡선)";
+// 측정 선택이 바뀌었을 때, 이미 그려져 있는 단계 내용을 다시 그린다
+function refreshSlots(topic) {
+  const hooks = { s2: renderStep2Chart, s3: renderStep3Chart };
+  for (const [id, el] of Object.entries(slots)) {
+    if (el.isConnected) hooks[id](el, topic);
+  }
+}
+
+// 2단계: 그래프 + "학급과 비교해서 보기" 토글
+// (exp1과 달리 그래프 종류는 고르지 않는다 — 주제마다 산점도/선그래프가 이미 정해져 있다)
+function renderStep2Chart(slotEl, topic) {
+  const opts = analysis.chartOptions;
+  if (opts.showClass === undefined) opts.showClass = true;
+
   slotEl.innerHTML = `
-    <div class="exp3-chartbox exp3-placeholder">
-      <p class="exp3-dim">${kind} 자리 — 다음 단계에서 실제 그래프를 연결해요.</p>
-    </div>
-    <div class="exp3-dim">자동 계산 표 자리 — 다음 단계에서 연결해요.</div>
+    <label class="exp3-toggle">
+      <input type="checkbox" id="exp3-classtoggle" ${opts.showClass ? "checked" : ""}>
+      학급 전체와 비교해서 보기 (다른 모둠은 익명으로 표시돼요)
+    </label>
+    <div class="exp3-chartbox"><canvas></canvas></div>
   `;
+
+  slotEl.querySelector("#exp3-classtoggle").addEventListener("change", async (e) => {
+    opts.showClass = e.target.checked;
+    await saveAnalysis(analysis);
+    draw();
+  });
+
+  const draw = () => drawChart(slotEl.querySelector("canvas"), topic, opts);
+  draw();
+}
+
+// 3단계: 그래프(좌표 확인용, 항상 학급 비교 포함) + 자동 계산 표
+function renderStep3Chart(slotEl, topic) {
+  slotEl.innerHTML = `
+    <div class="exp3-chartbox"><canvas></canvas></div>
+    <div id="exp3-stats"></div>
+  `;
+  drawChart(slotEl.querySelector("canvas"), topic, { ...analysis.chartOptions, showClass: true });
+
+  const picked = pickedDatasets();
+  const statsEl = slotEl.querySelector("#exp3-stats");
+  if (!picked.length) {
+    statsEl.innerHTML = `<p class="exp3-dim">위에서 측정을 골라 주세요.</p>`;
+    return;
+  }
+  // 자동 계산: 숫자만 보여준다. 해석은 학생 몫 (SPEC §8.4)
+  const head = topic.stats.map((s) => `<th>${s.label}</th>`).join("");
+  const rows = picked
+    .map((d) => {
+      const st = topic.chartMode === "scatter" ? computeStatsIntensity(d) : computeStatsRecovery(d, topic);
+      const cells = topic.stats.map((s) => `<td>${st[s.key] ?? "—"}</td>`).join("");
+      return `<tr><td>${d.title}</td>${cells}</tr>`;
+    })
+    .join("");
+  statsEl.innerHTML = `<p class="exp3-help">자동 계산 — 내가 그래프에서 짚은 값과 비교해 보세요.</p>
+    <table class="exp3-table"><thead><tr><th>측정</th>${head}</tr></thead><tbody>${rows}</tbody></table>`;
+}
+
+// 고른 측정들을 그린다. 주제에 따라 산점도/선그래프로 갈라진다.
+async function drawChart(canvasEl, topic, opts) {
+  const picked = pickedDatasets();
+  if (!picked.length) {
+    canvasEl.replaceWith(Object.assign(document.createElement("p"), {
+      className: "exp3-dim", textContent: "위에서 측정을 골라 주세요.",
+    }));
+    return;
+  }
+  if (topic.chartMode === "scatter") await drawScatterChart(canvasEl, topic, opts, picked);
+  else await drawLineChart(canvasEl, topic, opts, picked);
+}
+
+// ── 주제① 산점도: 운동 강도 → 최고 심박수 ───────────────────
+// 측정 1건 = 점 1개. x는 조건에서 뽑은 운동 강도 단계, y는 그 측정의 최고 심박수.
+async function drawScatterChart(canvasEl, topic, opts, picked) {
+  const ours = picked
+    .map((d) => ({ x: EXP3.intensityStep[d.condition], y: peakValue(d) }))
+    .filter((p) => p.x != null);
+
+  const spec = {
+    type: "scatter",
+    xLabel: topic.xLabel,
+    yLabel: topic.yLabel,
+    tooltip: topic.tooltip,
+    datasets: [{ label: "우리 모둠", points: ours, color: "#2563eb" }],
+  };
+
+  if (opts.showClass) {
+    const classDatasets = await listClassDatasets(EXP3.expNo);
+    if (!canvasEl.isConnected) return; // 그리는 사이 화면이 바뀌었으면 그만둔다
+    const others = classDatasets.filter(
+      (d) => d.groupId !== session.groupId && EXP3.intensityStep[d.condition] != null
+    );
+    const otherPoints = others.map((d) => ({ x: EXP3.intensityStep[d.condition], y: peakValue(d) }));
+    if (otherPoints.length) {
+      spec.datasets.unshift({ label: "다른 모둠", points: otherPoints, color: "#cbd5e1" });
+    }
+    const allY = [...ours, ...otherPoints].map((p) => p.y);
+    if (allY.length) {
+      spec.refLine = { value: avg(allY), label: "학급 평균", color: EXP3.classAvgColor };
+    }
+  } else if (!canvasEl.isConnected) {
+    return;
+  }
+
+  renderChart(canvasEl, spec);
+}
+
+// ── 주제② 선그래프: 심박수 회복 곡선 ─────────────────────────
+async function drawLineChart(canvasEl, topic, opts, picked) {
+  const spec = {
+    type: "line",
+    xLabel: topic.xLabel,
+    yLabel: topic.yLabel,
+    tooltip: topic.tooltip,
+    datasets: picked.map((d) => ({ label: d.title, points: d.points })),
+    events: picked.flatMap((d) => d.events || []),
+  };
+
+  if (opts.showClass) {
+    const classDatasets = await listClassDatasets(EXP3.expNo);
+    if (!canvasEl.isConnected) return;
+    // 회복 곡선과 비교할 값이므로 운동 조건만 모아 "학급 평균 최고 심박수"를 계산한다
+    const exercised = classDatasets.filter((d) => d.condition === "가벼운 운동 후" || d.condition === "심한 운동 후");
+    if (exercised.length) {
+      spec.refLine = { value: avg(exercised.map(peakValue)), label: "학급 평균 최고 심박수", color: EXP3.classAvgColor };
+    }
+  } else if (!canvasEl.isConnected) {
+    return;
+  }
+
+  renderChart(canvasEl, spec);
+}
+
+// ── 자동 계산 ─────────────────────────────────────────────
+function peakValue(d) {
+  return Math.max(...d.points.map((p) => p.v));
+}
+
+// 마지막 seconds초 동안의 평균값 — "측정 끝 무렵" 수준을 어림한다
+function tailAverage(points, seconds) {
+  if (!points.length) return 0;
+  const cut = points.at(-1).t - seconds;
+  const tail = points.filter((p) => p.t >= cut);
+  const use = tail.length ? tail : [points.at(-1)];
+  return use.reduce((s, p) => s + p.v, 0) / use.length;
+}
+
+function avg(nums) {
+  return nums.reduce((s, v) => s + v, 0) / nums.length;
+}
+
+// 주제①: 최고 심박수 / 측정 끝 무렵 심박수(안정 수준)
+function computeStatsIntensity(d) {
+  return {
+    peak: fmtV(peakValue(d), d.unit),
+    restBase: fmtV(tailAverage(d.points, 60), d.unit),
+  };
+}
+
+// 주제②: 최고 심박수 / 기저 수준(±여유값)까지 돌아오는 데 걸린 시간
+function computeStatsRecovery(d, topic) {
+  const baseline = tailAverage(d.points, 30);
+  const target = baseline + (topic.recoverMargin ?? 3);
+  const recovered = d.points.find((p) => p.v <= target);
+  return {
+    peak: fmtV(peakValue(d), d.unit),
+    recoverTime: recovered ? fmtTime(recovered.t) : "측정 시간 안에 못 돌아옴",
+  };
+}
+
+// 초 → "2분 05초" (툴팁과 같은 형식이라 학생이 대조하기 쉽다)
+function fmtTime(sec) {
+  const m = Math.floor(sec / 60);
+  const s = Math.round(sec % 60);
+  return `${m}분 ${String(s).padStart(2, "0")}초`;
+}
+
+// 값 + 단위 (예: "132.4 bpm")
+function fmtV(v, unit) {
+  return `${Math.round(v * 10) / 10} ${unit || "bpm"}`;
 }
 
 // ── 이 탭에서만 쓰는 최소 스타일 ──────────────────────────
@@ -218,8 +397,12 @@ function injectStyle() {
     .exp3-item { display: block; padding: 4px 0; cursor: pointer; }
     .exp3-item input { margin-right: 6px; }
     .exp3-practice { margin-top: 8px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-    .exp3-chartbox { position: relative; min-height: 200px; margin: 8px 0; display: flex; align-items: center; justify-content: center; }
-    .exp3-placeholder { border: 1px dashed #ccc; border-radius: 8px; }
+    .exp3-chartbox { position: relative; height: 320px; margin: 8px 0; }
+    .exp3-toggle { display: block; font-size: 14px; margin-bottom: 4px; cursor: pointer; }
+    .exp3-toggle input { margin-right: 6px; }
+    .exp3-table { border-collapse: collapse; font-size: 14px; margin: 8px 0; width: 100%; }
+    .exp3-table th, .exp3-table td { border: 1px solid #ddd; padding: 4px 8px; text-align: left; }
+    .exp3-table th { background: #f6f7f9; }
     #exp3-topic-select { font-size: 14px; padding: 4px 6px; margin-top: 6px; }
   `;
   document.head.append(style);
