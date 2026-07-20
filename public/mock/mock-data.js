@@ -130,10 +130,31 @@ function mockExp3(condition) {
   return { sensor: "HeartRate", unit: "bpm", intervalSec, durationSec, points, events: [] };
 }
 
+// ── 실험 4: 물·식용유 가열 온도 (℃) ─────────────────────
+// 비열이 큰 물이 천천히 데워진다. 물 약 4.2, 식용유 약 2.0 J/g℃이므로
+// 같은 열을 주면 식용유가 대략 2배 빠르게 오른다.
+function mockExp4(condition) {
+  const intervalSec = 10;
+  const durationSec = 10 * 60;
+  const points = [];
+  const start = 22 + noise(1); // 실온에서 시작
+
+  // 식용유는 물보다 약 2.1배 빠르게 상승 (물 3.2℃/분, 식용유 6.7℃/분)
+  const isOil = /기름|식용유|유/.test(condition);
+  // 가열이 이어지면 열이 빠져나가 조금씩 완만해지므로 approach 곡선을 쓴다
+  const tau = 3000;
+  const target = start + (isOil ? 335 : 160); // 초기 기울기를 위 값으로 맞춘 목표
+
+  for (let t = 0; t <= durationSec; t += intervalSec) {
+    points.push({ t, v: round1(approach(start, target, t, tau) + noise(0.3)) });
+  }
+  return { sensor: "Temperature", unit: "℃", intervalSec, durationSec, points, events: [] };
+}
+
 // ── 공개 함수 ───────────────────────────────────────────
 // generateMock(expNo, condition) → Dataset (SPEC §7 시그니처)
 export function generateMock(expNo, condition) {
-  const gen = { 1: mockExp1, 2: mockExp2, 3: mockExp3 }[expNo];
+  const gen = { 1: mockExp1, 2: mockExp2, 3: mockExp3, 4: mockExp4 }[expNo];
   if (!gen) throw new Error(`알 수 없는 실험 번호: ${expNo}`);
   const { sensor, unit, intervalSec, durationSec, points, events } = gen(condition || "");
 
@@ -160,4 +181,5 @@ export const MOCK_CONDITIONS = {
   1: ["창문 닫음", "창문 열음", "쉬는 시간", "문만 열음"],
   2: ["어두움", "보통", "밝음"],
   3: ["안정 시", "가벼운 운동 후", "심한 운동 후"],
+  4: ["물", "식용유"],
 };

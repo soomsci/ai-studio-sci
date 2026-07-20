@@ -34,7 +34,7 @@ service cloud.firestore {
     // 측정 문서 쓰기 검증 (§5.2 한도를 규칙으로도 막는다)
     function validDataset() {
       return request.resource.data.points.size() <= 5000
-        && request.resource.data.expNo in [1, 2, 3];
+        && request.resource.data.expNo in [1, 2, 3, 4]; // 4 = 비열 (v2.0)
     }
 
     // 입장 코드 → 학급 찾기 (v1.7). 코드를 아는 사람만 문서 하나를 집어 읽는다.
