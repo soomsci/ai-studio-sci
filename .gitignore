@@ -1,6 +1,9 @@
 # macOS 시스템 파일
 .DS_Store
 
+# Firebase 배포 도구가 만드는 캐시 폴더 (커밋할 필요 없음)
+.firebase/
+
 # Firebase 실제 설정값 — 커밋 금지 (CLAUDE.md 절대 규칙 7)
 # 본보기는 public/js/firebase-config.example.js
 public/js/firebase-config.js
