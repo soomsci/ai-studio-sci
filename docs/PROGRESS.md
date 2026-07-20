@@ -4,6 +4,8 @@
 
 ## 미해결 위험
 
+- [ ] **🔴 수집기가 서비스 계정 키(관리자 권한)를 쓴다.** `uploader.py`가 `firebase-admin`을 쓰므로 **보안 규칙을 전부 우회한다.** 이 키가 모둠 노트북 6대에 배포되면 학생 누구나 전 학급 데이터를 지울 수 있다(데이터는 익명이라 유출 피해는 작지만 **삭제**가 진짜 위험). → 사용자가 **익명 인증 전환(선택지 B)으로 결정**. 프롬프트 ⑩. 걸림돌 확인됨: 리퍼러 제한 때문에 **수집기 전용 API 키를 따로 만들어야 한다**(⑩-b).
+
 - [ ] **🔴 웹앱이 수집기의 존재를 학생에게 알려주지 않는다** (2026-07-20 실사용 중 발견). 측정은 파이썬 수집기에서 하는 설계인데 웹앱에 관련 문구가 전무해, 사용자가 배포된 앱에서 "측정 시작 버튼이 없다"며 막혔다. **학생도 개학날 똑같이 막힌다.** 게다가 수집기가 요구하는 학급·모둠 아이디를 학생이 알 방법이 없다(웹앱은 이미 갖고 있는데 안 보여줌). → 프롬프트 ⑨-1(세션 A), ⑨-2(세션 F).
 - [ ] **수집기에서 실험 4를 고를 수 없다.** `templates/index.html`의 실험 목록에 1~3만 있고 `uploader.py`의 `VALID_EXP_NO = (1,2,3)`도 그대로다. 비열 측정을 올리면 거부된다. → 프롬프트 ⑨-2.
 
@@ -723,6 +725,133 @@ CLAUDE.md의 "작업 방식 — 토큰·비용 절약"을 지켜라.
 주의: 2·3번은 화면 문구만 고치는 일이다. 동작을 바꾸지 마라.
 ```
 
-### ⑩ 완료된 조치 (기록용)
+### ⑩ 세션 F — 수집기를 익명 인증으로 전환 (선택지 B, 사용자 결정)
+
+**배경**: 수집기가 `firebase-admin` + 서비스 계정 키를 쓴다. 이 키는 **보안 규칙을 전부 우회하는 관리자 권한**이고, 모둠 노트북 6대에 배포된다. 학생 한 명이 파일을 복사하면 전 학급 데이터를 지울 수 있다. 사용자가 이를 익명 인증 방식으로 바꾸기로 결정(2026-07-20).
+
+**세션 G가 미리 확인한 걸림돌** — API 키에 걸린 HTTP 리퍼러 제한이 파이썬 요청을 막는다:
+```
+PERMISSION_DENIED - Requests from referer <empty> are blocked.
+```
+→ **수집기 전용 API 키를 따로 만들어야 한다**(사용자 콘솔 작업, 아래 ⑩-b).
+
+#### ⑩-a 세션 F 프롬프트
+
+```
+━━━ 세션 F 창에 붙여넣기 ━━━
+
+CLAUDE.md의 "작업 방식 — 토큰·비용 절약"을 지켜라.
+
+수집기의 업로드 방식을 바꾼다. 지금은 firebase-admin + 서비스 계정 키를
+쓰는데, 이 키는 보안 규칙을 전부 우회하는 관리자 권한이다. 모둠 노트북
+6대에 이 파일이 깔리면 학생 누구나 전 학급 데이터를 지울 수 있다.
+익명 인증으로 바꿔서 웹앱 학생과 똑같이 보안 규칙의 통제를 받게 한다.
+
+관련 절: docs/SPEC.md §5.1, §5.4만 확인해라.
+담당 파일: collector/uploader.py, collector/requirements.txt,
+          필요하면 collector/main.py
+
+★ 세션 G가 미리 확인한 사실 (그대로 믿고 진행해라)
+- 익명 로그인 REST 호출은 동작하지만, 지금 API 키에는 HTTP 리퍼러
+  제한이 걸려 있어 파이썬에서 부르면 막힌다:
+    PERMISSION_DENIED - Requests from referer <empty> are blocked.
+  → 사용자가 수집기 전용 API 키를 따로 만들기로 했다. 너는 코드에서
+    그 키를 설정 파일로 읽게만 하면 된다. 웹앱 키를 쓰려고 하지 마라.
+- 맥 파이썬(python.org 설치본)은 CA 인증서가 없어 urllib이 SSL 오류를
+  낸다. requests를 써라(certifi 포함). requirements.txt에 추가하고
+  firebase-admin은 빼라.
+
+할 일:
+1. 설정 파일을 읽게 해라.
+   - collector/firebase-config.json 에 apiKey, projectId를 둔다.
+   - 저장소에는 collector/firebase-config.example.json 만 넣어라.
+     실제 파일은 .gitignore의 collector/*.json 규칙에 이미 걸린다.
+   - 이 키는 비밀값이 아니다(웹앱에도 들어 있다). 서비스 계정 키와
+     혼동하지 마라 — 그건 완전히 삭제한다.
+
+2. 익명 로그인 후 그 자격으로 업로드해라.
+   - POST https://identitytoolkit.googleapis.com/v1/accounts:signUp?key={apiKey}
+     body {"returnSecureToken": true}
+     → 응답의 idToken, localId 를 쓴다
+   - 업로드는 Firestore REST API로:
+     POST https://firestore.googleapis.com/v1/projects/{projectId}
+          /databases/(default)/documents/classes/{classId}/datasets
+     헤더 Authorization: Bearer {idToken}
+   - ★ ownerUid 에 반드시 localId 를 넣어라. 보안 규칙이
+     ownerUid == request.auth.uid 를 요구한다. 다르면 거부된다.
+   - idToken은 1시간 만에 만료된다. 측정 시작 때가 아니라
+     업로드 직전에 로그인해라.
+
+3. Firestore REST는 타입을 명시한 형식을 쓴다. 변환 함수를 만들어라.
+     숫자(정수) → {"integerValue": "1"}
+     숫자(실수) → {"doubleValue": 22.6}
+     문자열     → {"stringValue": "물"}
+     시각       → {"timestampValue": "2026-07-20T12:00:00Z"}
+     배열       → {"arrayValue": {"values": [...]}}
+     객체       → {"mapValue": {"fields": {...}}}
+   points는 [{t,v}] 이므로 arrayValue 안에 mapValue가 들어간다.
+   §5 스키마의 필드 이름·구조는 그대로 유지해라.
+
+4. 지금 있는 검증(points 5000개, expNo 범위, t 음수, 문서 크기)은
+   그대로 두어라. 규칙이 막기 전에 한국어로 알려 주는 편이 낫다.
+
+5. --dry-run은 네트워크 없이 계속 동작해야 한다.
+
+6. 실패 메시지를 한국어로 다듬어라. 특히 권한 거부(PERMISSION_DENIED)가
+   났을 때 "학급 아이디가 맞는지, 선생님이 학급을 만들었는지 확인하세요"
+   처럼 학생이 다음에 뭘 할지 알 수 있게 써라.
+
+주의:
+- 서비스 계정 키를 읽는 코드와 안내 문구를 전부 없애라.
+  collector/serviceAccount.json은 더 이상 쓰지 않는다.
+- firebase-admin을 걷어내면 PyInstaller 빌드 결과물도 크게 작아진다.
+  build.spec에 firebase-admin 관련 설정이 있으면 같이 정리해라.
+```
+
+#### ⑩-b 사용자 콘솔 작업 — 수집기 전용 API 키 만들기
+
+1. https://console.cloud.google.com/apis/credentials?project=ai-science-data-studio
+2. **사용자 인증 정보 만들기 → API 키**
+3. 새로 생긴 키의 이름을 알아보기 쉽게 바꾼다 (예: `collector-key`)
+4. **애플리케이션 제한사항: 없음** — 파이썬은 리퍼러를 안 보내므로 제한을 걸면 막힌다
+5. **API 제한사항**은 거는 편이 좋다. `Identity Toolkit API`와 `Cloud Firestore API`만 허용
+6. 이 키를 `collector/firebase-config.json`에 넣는다
+
+이 키가 노출돼도 서비스 계정 키와 달리 **보안 규칙 안에서만 동작한다.** 학생이 할 수 있는 일이 자기 모둠 측정을 올리는 것으로 제한된다.
+
+### ⑪ 세션 F — 측정 중 실시간 그래프 (사용자 요청, 급하지 않음)
+
+구동해서 확인한 결과 수집기 측정 화면에 그래프가 없다(`canvas`·`svg` 0개, "모은 값 N개" 숫자만). 사용자가 실시간 그래프를 원한다.
+
+```
+━━━ 세션 F 창에 붙여넣기 ━━━
+
+CLAUDE.md의 "작업 방식 — 토큰·비용 절약"을 지켜라.
+
+수집기에서 측정하는 동안 값이 어떻게 변하는지 그래프로 보고 싶다.
+지금은 "모은 값 N개" 숫자만 나와서 학생이 측정이 잘 되고 있는지,
+센서가 이상한 값을 내는지 알 수 없다.
+
+담당 파일: collector/templates/index.html (필요하면 collector/main.py)
+
+할 일:
+1. 측정 중 화면에 실시간 선그래프를 그려라.
+   - 이미 /api/status를 주기적으로 부르고 있고 응답에 points가 온다.
+     새 API를 만들 필요 없이 그 데이터를 그리면 된다.
+   - 센서를 여러 대 연결했으면 채널마다 선을 하나씩, 이름표와 함께
+     겹쳐 그려라 (물·식용유 비교가 이 기능의 핵심 용도다).
+2. Chart.js를 써라. 웹앱이 이미 쓰는 유일한 외부 라이브러리다
+   (CLAUDE.md 기술 규칙). CDN 주소는 public/index.html을 참고해라.
+3. 수업용 노트북이 인터넷에 못 붙는 상황도 있을 수 있다. CDN 로딩이
+   실패하면 그래프만 빠지고 측정 자체는 계속되게 해라.
+   측정이 그래프 때문에 멈추면 안 된다.
+4. 축 이름과 단위를 넣어라(시간(분), 값과 단위). 문구는 한국어로.
+
+주의: 측정 중에는 값이 계속 쌓인다. 점이 많아져도 화면이 느려지지
+않게 해라(예: 다시 그리기 주기를 적당히 두기). 45분 측정이면
+270개 정도가 정상 범위다.
+```
+
+### ⑫ 완료된 조치 (기록용)
 
 - Firebase API 키 HTTP 리퍼러 제한 — 사용자가 Google Cloud Console에서 설정 완료(2026-07-20).
