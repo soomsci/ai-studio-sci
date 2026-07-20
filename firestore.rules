@@ -1,15 +1,22 @@
 rules_version = '2';
 
-// 과학 데이터 스튜디오 — Firestore 보안 규칙 (세션 A)
-// 요지 (SPEC §5.4):
-//   - 인증되지 않은 접근은 전면 차단 (기본값이 거부이므로 별도 허용이 없으면 막힘)
-//   - datasets 읽기: 인증된 사용자 (학급 비교 기능에 필요)
-//   - datasets 쓰기: 생성은 인증된 사용자, 수정·삭제는 본인(ownerUid) 또는 교사
-//   - classes 문서 수정: 교사만
+// 과학 데이터 스튜디오 — Firestore 보안 규칙 (세션 A, SPEC v1.8 §5.4)
 //
-// 한계: 익명 인증에는 "어느 학급 소속인지" 증명이 없어서,
-// 학급 코드를 아는(=로그인한) 사용자는 다른 학급 문서도 읽을 수는 있다.
-// 학급 코드를 외부에 공개하지 않는 것으로 보완한다.
+// ★ 익명 인증의 한계 (§5.5) — 규칙을 고치기 전에 읽을 것 ★
+// 학생은 계정 없이 익명 인증으로 들어오므로, 규칙 입장에서는
+// "이 사람이 몇 반 몇 모둠인지" 증명할 방법이 없다. 그래서:
+//   - analyses를 ownerUid로 잠그지 않는다. 잠그면 브라우저 데이터가 지워졌을 때
+//     자기 모둠이 자기 분석을 못 고치게 되는 더 큰 사고가 난다.
+//     (다른 모둠이 덮어쓰는 위험은 화면 제한 + 교사 확인으로 보완)
+//   - 코드를 아는 사람의 학급 데이터 읽기는 규칙으로 못 막는다.
+//     학급 코드를 외부에 공개하지 않는 것으로 보완한다.
+// 감수 가능한 이유: 실명·개인식별 건강정보를 애초에 저장하지 않는다(절대 규칙 3·4).
+//
+// 요지:
+//   - joinCodes: get만 허용(문서 하나 지정). list 차단 → 코드를 모르면 학급을 못 찾는다
+//   - classes: get은 인증자 모두, list는 자기(teacherUid) 학급 조건 쿼리만 통과
+//   - datasets: 읽기는 인증자(학급 비교용), 쓰기는 본인·교사 + 크기 검증
+//   - 인증 없는 접근: 전면 차단 (기본 거부)
 
 service cloud.firestore {
   match /databases/{database}/documents {
@@ -24,9 +31,28 @@ service cloud.firestore {
         && get(/databases/$(database)/documents/classes/$(classId)).data.teacherUid == request.auth.uid;
     }
 
+    // 측정 문서 쓰기 검증 (§5.2 한도를 규칙으로도 막는다)
+    function validDataset() {
+      return request.resource.data.points.size() <= 5000
+        && request.resource.data.expNo in [1, 2, 3];
+    }
+
+    // 입장 코드 → 학급 찾기 (v1.7). 코드를 아는 사람만 문서 하나를 집어 읽는다.
+    match /joinCodes/{code} {
+      allow get: if signedIn();
+      // list는 허용 규칙이 없으므로 차단 — 코드 목록을 긁어갈 수 없다
+      allow create: if isTeacherOf(request.resource.data.classId);
+      allow update: if isTeacherOf(resource.data.classId)
+        && isTeacherOf(request.resource.data.classId);
+      allow delete: if isTeacherOf(resource.data.classId);
+    }
+
     match /classes/{classId} {
-      // 학급 코드 조회(입장)와 학급 이름 표시에 필요
-      allow read: if signedIn();
+      // get: 학생이 자기 학급 이름을 불러올 때 (문서 하나 지정)
+      allow get: if signedIn();
+      // list: 교사가 where("teacherUid","==",본인)으로 거는 쿼리만 통과.
+      // 조건 없는 전체 조회는 남의 학급이 섞일 수 있으므로 Firestore가 거부한다.
+      allow list: if signedIn() && resource.data.teacherUid == request.auth.uid;
       // 학급 생성·수정·삭제는 교사만
       allow create: if signedIn() && request.resource.data.teacherUid == request.auth.uid;
       allow update, delete: if isTeacherOf(classId);
@@ -38,16 +64,21 @@ service cloud.firestore {
 
       match /datasets/{datasetId} {
         allow read: if signedIn();
-        // 만들 때는 자기 uid를 ownerUid로 적어야 한다
-        allow create: if signedIn() && request.resource.data.ownerUid == request.auth.uid;
-        // 고치거나 지우는 건 만든 본인 또는 교사만
-        allow update, delete: if signedIn()
+        // 만들 때는 자기 uid를 ownerUid로 적어야 하고, 크기 검증을 통과해야 한다
+        allow create: if signedIn()
+          && request.resource.data.ownerUid == request.auth.uid
+          && validDataset();
+        // 고치는 것도 같은 검증을 거친다 (본인 또는 교사만)
+        allow update: if signedIn()
+          && (resource.data.ownerUid == request.auth.uid || isTeacherOf(classId))
+          && validDataset();
+        allow delete: if signedIn()
           && (resource.data.ownerUid == request.auth.uid || isTeacherOf(classId));
       }
 
       match /analyses/{analysisId} {
         allow read: if signedIn();
-        // 분석은 모둠이 자유롭게 쓰고 고친다
+        // 분석은 모둠이 자유롭게 쓰고 고친다 (ownerUid로 잠그지 않는 이유는 맨 위 주석)
         allow create, update: if signedIn();
         // 삭제는 교사만 (실수로 모둠 분석이 날아가는 것 방지)
         allow delete: if isTeacherOf(classId);

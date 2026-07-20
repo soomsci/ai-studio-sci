@@ -44,16 +44,16 @@ export async function join(joinCode, groupNo) {
   const { auth, db, authMod, fsMod } = await getFirebase();
   await authMod.signInAnonymously(auth);
 
-  const q = fsMod.query(
-    fsMod.collection(db, "classes"),
-    fsMod.where("joinCode", "==", joinCode),
-    fsMod.limit(1),
-  );
-  const snap = await fsMod.getDocs(q);
-  if (snap.empty) throw new Error("학급 코드를 찾을 수 없어요. 선생님께 다시 확인해 주세요.");
+  // 입장 절차 (SPEC v1.7 §5.3): classes 전체를 검색하지 않고
+  // joinCodes/{입력한 코드} 문서 하나만 집어 읽는다 (보안 규칙이 list를 막는다)
+  const codeSnap = await fsMod.getDoc(fsMod.doc(db, "joinCodes", joinCode));
+  if (!codeSnap.exists()) throw new Error("학급 코드를 찾을 수 없어요. 선생님께 다시 확인해 주세요.");
 
-  const doc = snap.docs[0];
-  store(doc.id, doc.data().name || "", joinCode, groupNo);
+  const classId = codeSnap.data().classId;
+  const classSnap = await fsMod.getDoc(fsMod.doc(db, "classes", classId));
+  if (!classSnap.exists()) throw new Error("학급 정보가 없어요. 선생님께 알려 주세요.");
+
+  store(classId, classSnap.data().name || "", joinCode, groupNo);
   return getSession();
 }
 
