@@ -128,6 +128,9 @@ class PascoSensorSource:
         """측정 중 실시간 그래프 갱신용 — 현재까지 쌓인 점을 반환한다."""
         return list(self._points)
 
+    def latest_events(self) -> list[dict]:
+        return list(self._events)
+
     def stop(self) -> tuple[list[dict], list[dict]]:
         self._stop_flag.set()
         if self._thread:
@@ -182,6 +185,12 @@ class ManualInputSource:
         self._points = points
         if self._start_time is None:
             self._start_time = time.monotonic()
+
+    def latest_points(self) -> list[dict]:
+        return list(self._points)
+
+    def latest_events(self) -> list[dict]:
+        return list(self._events)
 
     def stop(self) -> tuple[list[dict], list[dict]]:
         return self._points, self._events
