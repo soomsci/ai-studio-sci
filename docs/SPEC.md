@@ -1,7 +1,7 @@
 # 과학 데이터 스튜디오 — 개발 명세서
 
 중학교 2학년 과학 프로젝트 수업용 데이터 수집·분석 웹앱
-작성일: 2026-07-19 (수정: v1.8) · 대상: 삼정중학교 2학년 · 총 17차시 · **개학일: 8월 14일**
+작성일: 2026-07-19 (수정: v1.9) · 대상: 삼정중학교 2학년 · 총 17차시 · **개학일: 8월 14일**
 
 ---
 
@@ -69,7 +69,20 @@ Chrome 최신 버전 기준. 다른 브라우저 대응은 하지 않습니다.
 
 ### 2.4 저장소·비밀정보 관리
 
-Firebase 설정값(API 키 등)은 코드에 하드코딩하되, **GitHub에 올릴 때는 비공개 저장소를 사용하거나 `.gitignore`로 제외**합니다. 세부 규칙은 `CLAUDE.md` 절대 규칙 7을 따릅니다.
+Firebase 설정값(API 키 등)은 `public/js/firebase-config.js`에 두고 `.gitignore`로 제외합니다(v1.6). 저장소에는 빈 본보기 `firebase-config.example.js`만 둡니다. 세부 규칙은 `CLAUDE.md` 절대 규칙 7을 따릅니다.
+
+참고: Firebase 웹 API 키는 본래 비밀값이 아니며(브라우저에 그대로 노출됨), 실제 보안 경계는 §5.4 보안 규칙과 인증입니다. 다만 남용 방지를 위해 **Google Cloud Console에서 HTTP 리퍼러 제한**을 걸어 둡니다(2026-07-20 적용 완료).
+
+### 2.5 배포 (v1.9)
+
+Firebase Hosting으로 배포합니다. 배포에 필요한 파일은 `firebase.json`, `.firebaserc` 두 개이며 **세션 A가 담당**합니다.
+
+- **Hosting 루트는 `public/`** 입니다. `collector/`·`docs/`·`mock` 원본 등은 배포되지 않습니다.
+- **단일 페이지 앱(SPA) 재작성 규칙을 넣지 마십시오.** 이 앱은 `join.html`·`index.html`·`teacher.html` **세 개의 실제 페이지**로 나뉘어 있어(§6.1), 모든 주소를 `index.html`로 돌리면 입장 화면과 교사 화면이 열리지 않습니다.
+- `firebase.json`에 `firestore.rules` 경로를 함께 지정해 `firebase deploy --only firestore:rules`로 규칙을 배포할 수 있게 합니다.
+- **`firebase-config.js`는 `.gitignore` 대상이지만 배포에는 반드시 포함되어야 합니다.** Hosting은 디스크에 있는 `public/` 내용을 그대로 올리므로 로컬에 파일이 있으면 배포됩니다. 다만 **저장소를 새로 내려받은 컴퓨터에서 배포하면 이 파일이 없어 앱이 조용히 "연습 모드"로 배포됩니다.** 배포 전 파일 존재를 확인하십시오.
+
+**CLI 설치에 대하여** — `CLAUDE.md` 기술 규칙의 "`npm install` 하지 않는다"는 **앱이 실행에 쓰는 라이브러리**를 두고 한 말입니다. 배포 도구인 `firebase-tools`를 전역 설치(`npm install -g firebase-tools`)하는 것은 이 규칙과 무관하며 필요합니다. 앱 코드는 여전히 순수 HTML+CSS+JS이고 빌드 단계가 없습니다.
 
 ---
 
@@ -128,6 +141,8 @@ science-data-studio/
 │   ├── uploader.py
 │   └── build.spec
 ├── .gitignore                   [세션 A] Firebase 설정값 등 제외
+├── firebase.json                [세션 A] Hosting·Firestore 배포 설정 (v1.9)
+├── .firebaserc                  [세션 A] 배포 대상 프로젝트 지정 (v1.9)
 └── firestore.rules              [세션 A] 보안 규칙
 
 (별도 파일)
@@ -778,5 +793,6 @@ export const config = {
 | 2026-07-19 | v1.4 — 세션 G에 변경 요청 라우팅 역할 추가. 사용자가 수정을 요청하면 §4 기준으로 담당 세션을 판단하고 붙여넣을 프롬프트를 작성. `CLAUDE.md`에 "변경 요청 라우팅" 절 신설(처리 절차, 프롬프트 형식, 예시) |
 | 2026-07-19 | v1.5 — 개학일(8월 14일) 명시, §13 일정 문구 수정. 세션 G 역할 확장: §12 이행 감사, 문서 변경 이력 직접 관리, 미해결 위험 항목 추적, 용어·톤 일관성 점검, 배포 전 점검(개학 기준). `CLAUDE.md`에 4개 하위 절 신설 |
 | 2026-07-20 | v1.6 — §6.1 입장 화면을 `join.html`로 분리(실제 페이지 이동 방식), `index.html`은 본 화면 전용. §4 `mock/`을 `public/mock/`으로 이동(배포 포함), Firebase 설정값을 `firebase-config.js`(커밋 제외)로 분리 (세션 A, 커밋 `c57f604`) |
+| 2026-07-20 | v1.9 — 배포 설정 담당 확정(세션 G). §4에 `firebase.json`·`.firebaserc`를 세션 A 소유로 추가, §2.5 배포 절 신설(Hosting 루트 `public/`, SPA 재작성 금지 — 세 페이지 구조라 입장·교사 화면이 깨짐, 규칙 배포 경로, `firebase-config.js` 미포함 배포 주의). §2.4를 v1.6 구조에 맞게 갱신하고 리퍼러 제한 적용 사실 기록 |
 | 2026-07-20 | v1.8 — §5.4 정정(세션 G). v1.7이 `classes`의 `list`를 전면 차단으로 적었으나, 그대로 구현하면 교사 대시보드(`js/teacher.js`)가 자기 학급 목록을 불러오지 못한다. `resource.data.teacherUid == request.auth.uid` 조건부 `list` 허용으로 바꿔 교사 쿼리는 통과하고 학생의 전체 조회는 거부되게 함 |
 | 2026-07-20 | v1.7 — 보안 규칙 강화(세션 G). §5.1에 `joinCodes` 조회 컬렉션 신설 — 입장 시 `classes` 전체 검색(`list`) 대신 코드 문서 하나만 `get`. §5.2에 학급 생성·코드 교체 절차, §5.3에 입장 절차, §5.4 보안 규칙 요지 개정(`list` 차단·쓰기 검증), §5.5 "익명 인증의 한계" 신설(모둠 간 덮어쓰기는 규칙으로 못 막음을 명시) |
