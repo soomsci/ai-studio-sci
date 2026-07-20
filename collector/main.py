@@ -268,9 +268,17 @@ def _build_dataset(meta: dict, title: str, sensor_name: str, unit: str,
 @app.route("/api/upload", methods=["POST"])
 def api_upload():
     """실시간 모드는 채널마다 datasets 문서 1개(§5.2 — 측정 1회 = 문서 1개,
-    센서 하나당 sensor·unit은 단수). 수동 모드는 기존처럼 문서 1개."""
+    센서 하나당 sensor·unit은 단수). 수동 모드는 기존처럼 문서 1개.
+
+    학생과 똑같이 익명 로그인 뒤 그 자격으로 올린다(관리자 권한을 쓰지 않는다).
+    채널이 여러 개면 로그인은 한 번만 하고 같은 토큰을 재사용한다."""
     with LOCK:
         meta = SESSION.meta
+
+        try:
+            config = uploader.load_config()
+        except uploader.UploadError as exc:
+            return jsonify(ok=False, error=str(exc)), 500
 
         if SESSION.mode == "realtime":
             if not SESSION.channels:
@@ -293,10 +301,13 @@ def api_upload():
 
             results = []
             try:
+                id_token, local_id = uploader.sign_in_anonymously(config["apiKey"])
                 for ch, ds in datasets:
-                    dataset_id = uploader.upload_dataset(ds)
+                    dataset_id = uploader.upload_dataset(
+                        ds, config["apiKey"], config["projectId"], id_token, local_id
+                    )
                     results.append({"deviceId": ch.device_id, "label": ch.label, "datasetId": dataset_id})
-            except (FileNotFoundError, ModuleNotFoundError) as exc:
+            except uploader.UploadError as exc:
                 return jsonify(ok=False, error=str(exc)), 500
             return jsonify(ok=True, results=results)
 
@@ -308,10 +319,10 @@ def api_upload():
             SESSION.manual_source.latest_points(), SESSION.manual_source.latest_events(), "manual",
         )
         try:
-            dataset_id = uploader.upload_dataset(ds)
+            dataset_id = uploader.upload_dataset(ds, config["apiKey"], config["projectId"])
         except uploader.SchemaError as exc:
             return jsonify(ok=False, error=str(exc)), 400
-        except (FileNotFoundError, ModuleNotFoundError) as exc:
+        except uploader.UploadError as exc:
             return jsonify(ok=False, error=str(exc)), 500
 
     return jsonify(ok=True, datasetId=dataset_id)

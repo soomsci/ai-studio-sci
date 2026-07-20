@@ -6,9 +6,11 @@
 #
 # 주의:
 #   - Python 3.11에서 빌드한다 (CLAUDE.md: pasco 라이브러리 요구사항).
-#   - collector/serviceAccount.json(Firebase 서비스 계정 키)은 실행 파일에
+#   - collector/firebase-config.json(apiKey·projectId — 비밀값 아님)은 실행 파일에
 #     포함하지 않는다. 실행 파일과 같은 폴더에 따로 두고 실행해야 한다.
 #   - templates/ 폴더(로컬 웹 화면)는 실행 파일 안에 함께 담는다.
+#   - firebase-admin(관리자 권한)은 더 이상 쓰지 않는다 — 익명 인증 + Firestore
+#     REST API(requests)로 바꿔서 빌드 결과물도 훨씬 작아졌다.
 
 import os
 
@@ -22,13 +24,11 @@ a = Analysis(
         (os.path.join(here, "templates"), "templates"),
     ],
     hiddenimports=[
-        # pasco·firebase_admin은 동적 import(지연 import)로 쓰는 곳이 있어
+        # pasco·requests는 동적 import(지연 import)로 쓰는 곳이 있어
         # PyInstaller가 자동으로 못 찾을 수 있으므로 명시한다.
         "pasco",
         "pasco.pasco_ble_device",
-        "firebase_admin",
-        "firebase_admin.credentials",
-        "firebase_admin.firestore",
+        "requests",
     ],
     hookspath=[],
     hooksconfig={},
