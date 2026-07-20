@@ -4,20 +4,21 @@
 //   - Google 로그인
 //   - 모둠별 진행 현황 (측정 건수·분석 단계 진도·결론 작성 여부)
 //   - 학급 종합 그래프 (전 모둠 겹쳐 보기, chart-kit.js 재사용)
-//   - 데이터 관리 (측정 삭제, activeExp 전환)
+//   - 데이터 관리 (측정 삭제, activeExp 전환, 실험 탭 표시/숨김 — v2.0)
 //   - 교실 화면용 실시간 뷰
 //
-// 주의: js/data.js의 함수들(listClassDatasets 등)은 "이 브라우저에 저장된 학생 세션의 classId"에
-// 고정돼 있어 교사가 다른 classId를 볼 때는 못 쓴다. 아래 fetch*는 연습 모드에서 data.js를 재사용하고,
-// 실제 Firebase 모드에서는 classId를 직접 받는 임시 구현이다 (세션 A에 정식 함수 추가 요청함 — 정리되면
-// fetch*/deleteDatasetDoc/setActiveExpField 안쪽을 data.js 호출로 교체).
+// 데이터 조회(fetchMyClasses 등)는 js/teacher-data.js로 분리돼 있다. 그 파일 상단 주석 참고.
 
 import { isConfigured, getFirebase } from "./firebase-init.js";
-import { MODE, listClassDatasets, getAnalysis } from "./data.js";
+import { MODE } from "./data.js";
 import { renderChart } from "./chart-kit.js";
+import {
+  fetchMyClasses, fetchClassDatasets, fetchAnalysis, deleteDatasetDoc,
+  setActiveExpField, setVisibleExpsField, getVisibleExps,
+} from "./teacher-data.js";
 
 const TOTAL_STEPS = 5; // §8 분석 단계는 5단계
-const EXP_LABELS = { 1: "환기 주기", 2: "식물 광합성", 3: "운동과 몸" };
+const EXP_LABELS = { 1: "환기 주기", 2: "식물 광합성", 3: "운동과 몸", 4: "비열(물·식용유)" };
 
 let currentUser = null;
 let myClasses = [];
@@ -106,48 +107,7 @@ function switchTab(name) {
   document.querySelectorAll(".th-section").forEach((s) => s.classList.toggle("active", s.id === "tab-" + name));
 }
 
-// ── 데이터 조회 (임시 구현 — 위 안내 참고) ──────────────────
-
-async function fsCtx() {
-  const { db, fsMod } = await getFirebase();
-  return { db, f: fsMod };
-}
-
-async function fetchMyClasses(uid) {
-  if (MODE === "mock") return [{ id: "mock-class", name: "연습용 학급", activeExp: 1 }];
-  const { db, f } = await fsCtx();
-  const q = f.query(f.collection(db, "classes"), f.where("teacherUid", "==", uid));
-  const snap = await f.getDocs(q);
-  return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-}
-
-async function fetchClassDatasets(classId, expNo) {
-  if (MODE === "mock") return listClassDatasets(expNo);
-  const { db, f } = await fsCtx();
-  const q = f.query(f.collection(db, "classes", classId, "datasets"), f.where("expNo", "==", expNo));
-  const snap = await f.getDocs(q);
-  return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-}
-
-async function fetchAnalysis(classId, expNo, groupId) {
-  if (MODE === "mock") return getAnalysis(expNo, groupId);
-  const { db, f } = await fsCtx();
-  const snap = await f.getDoc(f.doc(db, "classes", classId, "analyses", `exp${expNo}_${groupId}`));
-  return snap.exists() ? snap.data() : { answers: {}, conclusion: "" };
-}
-
-async function deleteDatasetDoc(classId, datasetId) {
-  if (MODE === "mock") return; // 연습 모드는 실제로 지우지 않는다
-  const { db, f } = await fsCtx();
-  await f.deleteDoc(f.doc(db, "classes", classId, "datasets", datasetId));
-}
-
-async function setActiveExpField(classId, expNo) {
-  if (MODE === "mock") { currentClass.activeExp = expNo; return; }
-  const { db, f } = await fsCtx();
-  await f.updateDoc(f.doc(db, "classes", classId), { activeExp: expNo });
-  currentClass.activeExp = expNo;
-}
+// ── 도우미 ───────────────────────────────────────────────
 
 function groupLabel(groupId) {
   return (groupId || "").replace(/^g/, "") + "모둠";
@@ -293,12 +253,41 @@ async function renderManageTab() {
     btn.textContent = `실험 ${n}로 전환`;
     btn.addEventListener("click", async () => {
       await setActiveExpField(currentClass.id, n);
+      currentClass.activeExp = n;
       await renderManageTab();
     });
     activeBox.append(btn);
   });
   el.append(activeBox);
-  if (MODE === "mock") el.append(notice("🧪 연습 모드에서는 전환·삭제가 화면에만 반영되고 저장되지 않아요."));
+
+  // 실험 탭 표시/숨김 (v2.0) — activeExp("지금 하는 실험")와는 다른 설정이다.
+  // 여기서 끈 실험은 학생 화면(index.html)의 탭 목록에서 아예 안 보인다.
+  const visibleBox = document.createElement("div");
+  visibleBox.className = "th-toolbar";
+  visibleBox.innerHTML = `<label>학생 화면에 보이는 실험 탭</label>`;
+  const visibleExps = getVisibleExps(currentClass);
+  [1, 2, 3, 4].forEach((n) => {
+    const wrap = document.createElement("label");
+    wrap.style.cssText = "display:inline-flex; align-items:center; gap:6px; margin-right:14px; font-size:14px;";
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.checked = visibleExps.includes(n);
+    checkbox.addEventListener("change", async () => {
+      const next = checkbox.checked
+        ? [...new Set([...getVisibleExps(currentClass), n])].sort()
+        : getVisibleExps(currentClass).filter((v) => v !== n);
+      await setVisibleExpsField(currentClass.id, next);
+      currentClass.visibleExps = next;
+      await renderManageTab();
+    });
+    const text = document.createElement("span");
+    text.textContent = `실험 ${n} · ${EXP_LABELS[n]}` + (n === 4 ? " (추가 실험 · 기본 꺼짐)" : "");
+    wrap.append(checkbox, text);
+    visibleBox.append(wrap);
+  });
+  el.append(visibleBox);
+
+  if (MODE === "mock") el.append(notice("🧪 연습 모드에서는 전환·삭제·표시 설정이 화면에만 반영되고 저장되지 않아요."));
 
   const table = document.createElement("table");
   table.className = "data-table";
