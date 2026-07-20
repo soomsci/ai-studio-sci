@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>선생님 대시보드 — 우리 반 데이터 스튜디오</title>
+  <link rel="stylesheet" href="./css/style.css">
+  <!-- Firebase 설정값 (커밋되지 않는 파일 — 없으면 연습 모드) -->
+  <script src="./js/firebase-config.js"></script>
+  <!-- 유일하게 허용된 외부 라이브러리: Chart.js (CDN) -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.js"></script>
+  <style>
+    /* teacher.html 전용 스타일 (세션 E). css/style.css의 색상 변수·버튼 클래스를 그대로 쓴다. */
+    body { background: var(--bg); }
+
+    .th-login {
+      min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px;
+    }
+    .th-login-card {
+      background: var(--card); border-radius: 16px; padding: 36px 32px; max-width: 380px; width: 100%;
+      box-shadow: 0 2px 12px rgba(0,0,0,.08); text-align: center;
+    }
+    .th-login-card h1 { font-size: 20px; margin: 0 0 8px; }
+    .th-login-card p { color: var(--dim); font-size: 14px; margin: 0 0 24px; }
+
+    .th-header {
+      display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px;
+      background: #fff; padding: 12px 20px; border-bottom: 1px solid var(--line);
+    }
+    .th-header-left { display: flex; align-items: center; gap: 12px; font-weight: 600; }
+    .th-header-right { display: flex; align-items: center; gap: 10px; font-size: 14px; color: var(--dim); }
+    select#class-select { padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; }
+
+    .th-tabs {
+      display: flex; gap: 4px; padding: 10px 20px 0; background: #fff; border-bottom: 1px solid var(--line);
+    }
+    .th-tab {
+      background: transparent; border: none; padding: 10px 16px; font-size: 15px; color: var(--dim);
+      border-bottom: 3px solid transparent; border-radius: 0;
+    }
+    .th-tab.active { color: var(--blue); border-bottom-color: var(--blue); font-weight: 600; }
+
+    .th-main { max-width: 1100px; margin: 0 auto; padding: 20px; }
+    .th-section { display: none; }
+    .th-section.active { display: block; }
+
+    .th-notice {
+      background: #fffbeb; border: 1px solid #fde68a; color: #92400e; border-radius: 10px;
+      padding: 10px 14px; font-size: 14px; margin-bottom: 16px;
+    }
+
+    table.progress-table { width: 100%; border-collapse: collapse; background: #fff; border-radius: 12px; overflow: hidden; }
+    table.progress-table th, table.progress-table td {
+      padding: 10px 12px; text-align: center; border-bottom: 1px solid var(--line); font-size: 14px;
+    }
+    table.progress-table th { background: #f9fafb; color: var(--dim); font-weight: 600; }
+    table.progress-table td.group-name { text-align: left; font-weight: 600; }
+    .step-badge {
+      display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 600;
+    }
+    .step-badge.done { background: #d1fae5; color: #065f46; }
+    .step-badge.doing { background: #fef3c7; color: #92400e; }
+    .step-badge.none { background: #f3f4f6; color: var(--dim); }
+
+    .th-toolbar { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; }
+    .th-toolbar label { font-size: 14px; color: var(--dim); }
+    .th-toolbar select { padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; }
+
+    .chart-wrap { background: #fff; border-radius: 12px; padding: 16px; height: 420px; }
+
+    table.data-table { width: 100%; border-collapse: collapse; background: #fff; border-radius: 12px; overflow: hidden; }
+    table.data-table th, table.data-table td {
+      padding: 8px 10px; text-align: left; border-bottom: 1px solid var(--line); font-size: 13px;
+    }
+    table.data-table th { background: #f9fafb; color: var(--dim); }
+
+    .exp-switch { display: flex; gap: 8px; margin-bottom: 16px; }
+
+    .tv-view {
+      background: #0b1220; color: #fff; min-height: 100vh; padding: 40px; text-align: center;
+    }
+    .tv-view h1 { font-size: 36px; margin: 0 0 30px; }
+    .tv-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 20px; max-width: 1000px; margin: 0 auto; }
+    .tv-card { background: #172033; border-radius: 16px; padding: 24px; }
+    .tv-card .tv-group { font-size: 22px; font-weight: 700; margin-bottom: 10px; }
+    .tv-card .tv-count { font-size: 44px; font-weight: 800; color: #60a5fa; }
+    .tv-card .tv-label { font-size: 14px; color: #9ca3af; margin-top: 6px; }
+    .tv-exit { position: fixed; top: 16px; right: 16px; }
+
+    @media (max-width: 700px) {
+      table.progress-table, table.progress-table thead, table.progress-table tbody, table.progress-table th, table.progress-table td, table.progress-table tr { display: block; }
+      table.progress-table th { position: absolute; left: -9999px; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- 로그인 전 화면 -->
+  <div id="login-gate" class="th-login">
+    <div class="th-login-card">
+      <h1>선생님 대시보드</h1>
+      <p>Google 계정으로 로그인하면 우리 반 학생들의 진행 현황을 볼 수 있어요.</p>
+      <button id="google-login-btn" class="btn big">Google로 로그인</button>
+      <div id="login-error" class="th-notice" style="display:none; margin-top:16px;"></div>
+    </div>
+  </div>
+
+  <!-- 로그인 후 대시보드 -->
+  <div id="dashboard" style="display:none;">
+    <header class="th-header">
+      <div class="th-header-left">
+        <span>👩‍🏫 선생님 대시보드</span>
+        <select id="class-select"></select>
+      </div>
+      <div class="th-header-right">
+        <span id="teacher-label"></span>
+        <button id="logout-btn" class="btn tiny ghost">로그아웃</button>
+      </div>
+    </header>
+
+    <nav class="th-tabs">
+      <button class="th-tab active" data-tab="progress">모둠별 진행 현황</button>
+      <button class="th-tab" data-tab="chart">학급 종합 그래프</button>
+      <button class="th-tab" data-tab="manage">데이터 관리</button>
+      <button class="th-tab" data-tab="tv">교실 화면</button>
+    </nav>
+
+    <main class="th-main">
+      <div id="tab-progress" class="th-section active"></div>
+      <div id="tab-chart" class="th-section"></div>
+      <div id="tab-manage" class="th-section"></div>
+      <div id="tab-tv" class="th-section"></div>
+    </main>
+  </div>
+
+  <script type="module" src="./js/teacher.js"></script>
+</body>
+</html>
