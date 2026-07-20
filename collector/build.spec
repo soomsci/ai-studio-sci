@@ -22,6 +22,7 @@ a = Analysis(
     binaries=[],
     datas=[
         (os.path.join(here, "templates"), "templates"),
+        (os.path.join(here, "static"), "static"),
     ],
     hiddenimports=[
         # pasco·requests는 동적 import(지연 import)로 쓰는 곳이 있어

@@ -46,6 +46,7 @@ class _Channel:
             "unit": self.source.unit,
             "count": len(points),
             "latestValue": points[-1]["v"] if points else None,
+            "points": points,  # 화면의 실시간 그래프가 채널별로 선을 그리는 데 쓴다
         }
 
 

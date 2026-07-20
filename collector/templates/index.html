@@ -24,7 +24,13 @@
   .channel-list li { border: 1px solid #eee; border-radius: 6px; padding: 10px; margin-bottom: 8px; }
   .channel-list .num { display: inline-block; font-weight: bold; font-family: monospace; background: #333; color: #fff; padding: 2px 6px; border-radius: 4px; margin-right: 6px; }
   .channel-list .val { float: right; color: #080; font-weight: bold; }
+  .chart-wrap { margin-top: 14px; max-width: 100%; }
+  .chart-wrap canvas { max-width: 100%; }
 </style>
+<!-- 웹앱(public/index.html)이 이미 쓰는 유일한 외부 라이브러리와 같은 버전.
+     수업용 노트북이 인터넷에 못 붙어 이 스크립트가 안 불려도, 아래 코드는
+     Chart가 없으면 그래프만 건너뛰고 측정 자체는 그대로 동작한다. -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.js"></script>
 </head>
 <body>
 
@@ -63,7 +69,7 @@
     <label>센서
       <select id="manualSensorSelect">
         {% for s in sensors.manual_only %}
-        <option value="{{ s.name }}">{{ s.name }} ({{ s.unit }})</option>
+        <option value="{{ s.name }}" data-unit="{{ s.unit }}">{{ s.name }} ({{ s.unit }})</option>
         {% endfor %}
       </select>
     </label>
@@ -92,6 +98,8 @@
 
   <ul class="channel-list" id="channelList"></ul>
 
+  <div class="chart-wrap"><canvas id="channelsChart" height="180"></canvas></div>
+
   <div class="row">
     <button id="btnStart" disabled>모든 센서 측정 시작</button>
     <button id="btnStop" disabled>측정 종료</button>
@@ -118,6 +126,7 @@
     </label>
     <button id="btnEvent2" disabled>이 순간 기록하기</button>
     <p>모은 값: <span id="point-count2">0</span>개</p>
+    <div class="chart-wrap"><canvas id="manualChart" height="180"></canvas></div>
   </div>
 
   <div id="pane-csv" hidden>
@@ -136,6 +145,7 @@
 
 <div id="status-msg"></div>
 
+<script src="/static/chart.js"></script>
 <script>
 const $ = (id) => document.getElementById(id);
 let mode = null; // "realtime" | "manual"
@@ -211,6 +221,7 @@ function renderChannels(channels) {
     list.appendChild(li);
   });
   $("btnStart").disabled = channels.length === 0;
+  updateChannelsChart(channels); // static/chart.js — CDN이 안 불려도 그 안에서 건너뛴다
 }
 
 $("btnAddChannel").addEventListener("click", async () => {
@@ -297,6 +308,7 @@ $("btnManualAdd").addEventListener("click", async () => {
   countEl.textContent = Number(countEl.textContent) + 1;
   $("manualValue").value = "";
   showMsg("값을 추가했어요.");
+  refreshManualChart();
 });
 
 $("btnEvent2").addEventListener("click", async () => {
@@ -316,6 +328,7 @@ $("btnCsvUpload").addEventListener("click", async () => {
   const result = await res.json();
   if (!result.ok) { showMsg(result.error, true); return; }
   showMsg(`CSV에서 ${result.count}개 값을 읽었어요.`);
+  refreshManualChart();
 });
 
 // ── 업로드 ──────────────────────────────────
