@@ -105,9 +105,9 @@ export async function mount(el) {
 }
 
 // 센서로 직접 측정하는 방법 안내.
-// 측정은 웹앱이 아니라 선생님이 나눠 준 별도 프로그램(센서 측정 도구)에서 한다.
-// 그 프로그램이 학급 아이디·모둠 아이디를 물어보는데, 학생은 이 값을 알 방법이 없으므로
-// 여기서 그대로 보여 주고 복사 단추를 붙인다. (학급 아이디는 외워 옮길 수 없는 문자열이다)
+// 측정은 웹앱이 아니라 선생님이 나눠 준 별도 프로그램에서 한다.
+// 그 프로그램이 학급 코드·모둠 번호를 물어보므로 여기서 그대로 보여 준다.
+// (프로그램 실행 방법은 적지 않는다 — 배포 형태가 아직 정해지지 않았다)
 function sensorGuide(session) {
   const box = document.createElement("details");
   box.className = "sensor-guide";
@@ -117,71 +117,24 @@ function sensorGuide(session) {
   box.append(summary);
 
   box.append(div("guide-text",
-    "측정은 이 화면이 아니라 선생님이 나눠 준 센서 측정 도구에서 해요. " +
-    "그 프로그램을 열면 학급 아이디와 모둠 아이디를 물어봐요. 아래 값을 복사해서 붙여넣으세요."));
+    "측정은 이 화면이 아니라 선생님이 나눠 준 센서 측정 프로그램에서 해요. " +
+    "그 프로그램을 열면 학급 코드와 모둠 번호를 물어봐요. 아래 값을 그대로 넣으면 돼요."));
 
-  box.append(idRow("우리 학급 아이디", session.classId));
-  box.append(idRow("우리 모둠 아이디", session.groupId));
+  box.append(codeRow("학급 코드", session.joinCode || "선생님께 물어보세요"));
+  box.append(codeRow("모둠 번호", session.groupName));
 
   box.append(div("guide-note",
     "센서가 없어도 괜찮아요. 각 실험 탭에서 연습 데이터를 만들면 분석하는 방법을 그대로 익힐 수 있어요."));
   return box;
 }
 
-// 아이디 한 줄: 이름 + 값 + 복사 단추
-function idRow(label, value) {
+// 값 한 줄: 이름 + 값. 둘 다 짧아서 눈으로 보고 옮겨 적을 수 있으므로
+// 복사 단추 대신 크고 또렷하게 보여 준다.
+function codeRow(label, value) {
   const row = div("id-row");
   row.append(div("id-label", label));
-
-  const valueEl = div("id-value", value);
-  row.append(valueEl);
-
-  const btn = document.createElement("button");
-  btn.type = "button";
-  btn.className = "btn small copy-btn";
-  btn.textContent = "복사";
-  btn.addEventListener("click", async () => {
-    if (await copyText(value, valueEl)) {
-      btn.textContent = "복사됨!";
-      btn.classList.add("copied");
-    } else {
-      // 복사가 막힌 환경에서는 값을 선택해 주어 학생이 직접 복사할 수 있게 한다
-      btn.textContent = "위 글자를 복사하세요";
-      selectText(valueEl);
-    }
-    setTimeout(() => { btn.textContent = "복사"; btn.classList.remove("copied"); }, 2000);
-  });
-  row.append(btn);
+  row.append(div("id-value", value));
   return row;
-}
-
-// 브라우저마다 복사 방식이 막히는 경우가 달라 두 가지를 차례로 시도한다.
-// 어느 쪽도 안 되면 false를 돌려주어 "직접 복사하세요" 안내가 뜨게 한다.
-async function copyText(text, node) {
-  try {
-    // 응답이 없는 브라우저가 있어 1초만 기다린다 (안 그러면 단추가 아무 반응도 못 한다)
-    await Promise.race([
-      navigator.clipboard.writeText(text),
-      new Promise((_, reject) => setTimeout(() => reject(new Error("시간 초과")), 1000)),
-    ]);
-    return true;
-  } catch {
-    // 옛 방식으로 한 번 더 시도
-    try {
-      selectText(node);
-      return document.execCommand("copy");
-    } catch {
-      return false;
-    }
-  }
-}
-
-function selectText(node) {
-  const range = document.createRange();
-  range.selectNodeContents(node);
-  const sel = window.getSelection();
-  sel.removeAllRanges();
-  sel.addRange(range);
 }
 
 function div(className, text) {
