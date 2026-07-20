@@ -31,6 +31,24 @@
     .th-header-right { display: flex; align-items: center; gap: 10px; font-size: 14px; color: var(--dim); }
     select#class-select { padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; }
 
+    /* 학급 만들기 모달 (v2.1) */
+    .th-modal-backdrop {
+      position: fixed; inset: 0; background: rgba(17,24,39,.45);
+      display: flex; align-items: center; justify-content: center; padding: 20px; z-index: 50;
+    }
+    .th-modal {
+      background: #fff; border-radius: 16px; padding: 28px; max-width: 380px; width: 100%;
+      box-shadow: 0 8px 30px rgba(0,0,0,.15);
+    }
+    .th-modal h2 { font-size: 18px; margin: 0 0 6px; }
+    .th-modal p.hint { color: var(--dim); font-size: 13px; margin: 0 0 18px; }
+    .th-modal label { display: block; font-size: 14px; font-weight: 600; margin: 14px 0 6px; }
+    .th-modal input[type="text"] {
+      width: 100%; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; font-size: 15px;
+    }
+    .th-modal .th-modal-actions { display: flex; gap: 10px; margin-top: 22px; }
+    .th-modal .th-modal-actions .btn { flex: 1; }
+
     .th-tabs {
       display: flex; gap: 4px; padding: 10px 20px 0; background: #fff; border-bottom: 1px solid var(--line);
     }
@@ -111,6 +129,7 @@
       <div class="th-header-left">
         <span>👩‍🏫 선생님 대시보드</span>
         <select id="class-select"></select>
+        <button id="new-class-btn" class="btn tiny ghost">+ 새 학급 만들기</button>
       </div>
       <div class="th-header-right">
         <span id="teacher-label"></span>
@@ -131,6 +150,23 @@
       <div id="tab-manage" class="th-section"></div>
       <div id="tab-tv" class="th-section"></div>
     </main>
+  </div>
+
+  <!-- 학급 만들기 모달 (v2.1) -->
+  <div id="new-class-modal" class="th-modal-backdrop" style="display:none;">
+    <div class="th-modal">
+      <h2>새 학급 만들기</h2>
+      <p class="hint">반 이름과 학생이 입장할 때 쓸 코드를 정해 주세요.</p>
+      <label for="new-class-name">반 이름</label>
+      <input id="new-class-name" type="text" placeholder="예: 2학년 3반">
+      <label for="new-class-code">입장 코드</label>
+      <input id="new-class-code" type="text" placeholder="예: 3B-2026">
+      <div id="new-class-error" class="th-notice" style="display:none; margin-top:14px; margin-bottom:0;"></div>
+      <div class="th-modal-actions">
+        <button id="new-class-cancel" class="btn ghost">취소</button>
+        <button id="new-class-submit" class="btn">만들기</button>
+      </div>
+    </div>
   </div>
 
   <script type="module" src="./js/teacher.js"></script>

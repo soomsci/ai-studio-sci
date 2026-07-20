@@ -1,24 +1,13 @@
-// js/teacher.js — 선생님 대시보드 (세션 E)
+// js/teacher.js — 선생님 대시보드 앱 셸 (세션 E)
 //
 // 구성 (SPEC §11 세션 E):
-//   - Google 로그인
-//   - 모둠별 진행 현황 (측정 건수·분석 단계 진도·결론 작성 여부)
-//   - 학급 종합 그래프 (전 모둠 겹쳐 보기, chart-kit.js 재사용)
-//   - 데이터 관리 (측정 삭제, activeExp 전환, 실험 탭 표시/숨김 — v2.0)
-//   - 교실 화면용 실시간 뷰
-//
-// 데이터 조회(fetchMyClasses 등)는 js/teacher-data.js로 분리돼 있다. 그 파일 상단 주석 참고.
+//   - Google 로그인, 학급 선택, 학급 만들기(v2.1), 탭 전환
+//   - 탭 4개(모둠별 진행 현황·학급 종합 그래프·데이터 관리·교실 화면)의 실제 내용은
+//     js/teacher-tabs.js가 그린다. 데이터 조회는 js/teacher-data.js. 두 파일 상단 주석 참고.
 
 import { isConfigured, getFirebase } from "./firebase-init.js";
-import { MODE } from "./data.js";
-import { renderChart } from "./chart-kit.js";
-import {
-  fetchMyClasses, fetchClassDatasets, fetchAnalysis, deleteDatasetDoc,
-  setActiveExpField, setVisibleExpsField, getVisibleExps,
-} from "./teacher-data.js";
-
-const TOTAL_STEPS = 5; // §8 분석 단계는 5단계
-const EXP_LABELS = { 1: "환기 주기", 2: "식물 광합성", 3: "운동과 몸", 4: "비열(물·식용유)" };
+import { fetchMyClasses, createClass } from "./teacher-data.js";
+import { renderProgressTab, renderChartTab, renderManageTab, renderTvTab } from "./teacher-tabs.js";
 
 let currentUser = null;
 let myClasses = [];
@@ -71,11 +60,23 @@ async function enterDashboard() {
     location.reload();
   });
 
+  // 탭 전환
+  document.querySelectorAll(".th-tab").forEach((btn) => {
+    btn.addEventListener("click", () => switchTab(btn.dataset.tab));
+  });
+
+  setupNewClassModal();
+  await refreshClassList();
+}
+
+// 학급 목록을 다시 불러와 드롭다운을 채운다. selectId를 주면 그 학급을 골라 보여준다.
+async function refreshClassList(selectId) {
   myClasses = await fetchMyClasses(currentUser.uid);
   const select = document.getElementById("class-select");
   select.innerHTML = "";
   if (myClasses.length === 0) {
     select.innerHTML = `<option>담당 학급이 없어요</option>`;
+    openNewClassModal(); // 만들 학급이 없으면 바로 만들기 화면을 띄운다
     return;
   }
   myClasses.forEach((c) => {
@@ -84,305 +85,67 @@ async function enterDashboard() {
     opt.textContent = c.name || c.id;
     select.append(opt);
   });
-  select.addEventListener("change", () => selectClass(select.value));
+  select.onchange = () => selectClass(select.value);
 
-  // 탭 전환
-  document.querySelectorAll(".th-tab").forEach((btn) => {
-    btn.addEventListener("click", () => switchTab(btn.dataset.tab));
-  });
+  await selectClass(selectId || myClasses[0].id);
+}
 
-  await selectClass(myClasses[0].id);
+// ── 학급 만들기 (v2.1) ───────────────────────────────────
+
+function setupNewClassModal() {
+  document.getElementById("new-class-btn").addEventListener("click", () => openNewClassModal());
+  document.getElementById("new-class-cancel").addEventListener("click", () => closeNewClassModal());
+  document.getElementById("new-class-submit").addEventListener("click", handleCreateClass);
+}
+
+function openNewClassModal() {
+  document.getElementById("new-class-error").style.display = "none";
+  document.getElementById("new-class-name").value = "";
+  document.getElementById("new-class-code").value = "";
+  document.getElementById("new-class-modal").style.display = "flex";
+}
+
+function closeNewClassModal() {
+  document.getElementById("new-class-modal").style.display = "none";
+}
+
+async function handleCreateClass() {
+  const errBox = document.getElementById("new-class-error");
+  const submitBtn = document.getElementById("new-class-submit");
+  const name = document.getElementById("new-class-name").value.trim();
+  const joinCode = document.getElementById("new-class-code").value.trim();
+  errBox.style.display = "none";
+
+  if (!name || !joinCode) {
+    errBox.textContent = "반 이름과 입장 코드를 모두 입력해 주세요.";
+    errBox.style.display = "block";
+    return;
+  }
+
+  submitBtn.disabled = true;
+  submitBtn.textContent = "만드는 중…";
+  try {
+    const newClass = await createClass({ name, joinCode, teacherUid: currentUser.uid });
+    closeNewClassModal();
+    await refreshClassList(newClass.id);
+  } catch (err) {
+    errBox.textContent = err.message || "학급을 만들지 못했어요. 다시 시도해 주세요.";
+    errBox.style.display = "block";
+  } finally {
+    submitBtn.disabled = false;
+    submitBtn.textContent = "만들기";
+  }
 }
 
 async function selectClass(classId) {
   currentClass = myClasses.find((c) => c.id === classId) || { id: classId };
-  await renderProgressTab();
-  await renderChartTab();
-  await renderManageTab();
-  await renderTvTab();
+  await renderProgressTab(currentClass);
+  await renderChartTab(currentClass);
+  await renderManageTab(currentClass);
+  await renderTvTab(currentClass);
 }
 
 function switchTab(name) {
   document.querySelectorAll(".th-tab").forEach((b) => b.classList.toggle("active", b.dataset.tab === name));
   document.querySelectorAll(".th-section").forEach((s) => s.classList.toggle("active", s.id === "tab-" + name));
-}
-
-// ── 도우미 ───────────────────────────────────────────────
-
-function groupLabel(groupId) {
-  return (groupId || "").replace(/^g/, "") + "모둠";
-}
-
-// ── 1. 모둠별 진행 현황 ──────────────────────────────────
-
-async function renderProgressTab() {
-  const el = document.getElementById("tab-progress");
-  el.innerHTML = "";
-  if (MODE === "mock") el.append(notice("🧪 지금은 연습 모드예요. 가짜 데이터로 보여줘요."));
-
-  const loading = document.createElement("p");
-  loading.textContent = "불러오는 중…";
-  el.append(loading);
-
-  const perExp = await Promise.all([1, 2, 3].map(async (expNo) => {
-    const datasets = await fetchClassDatasets(currentClass.id, expNo);
-    const groupIds = [...new Set(datasets.map((d) => d.groupId))];
-    const counts = {};
-    datasets.forEach((d) => { counts[d.groupId] = (counts[d.groupId] || 0) + 1; });
-    const analyses = {};
-    await Promise.all(groupIds.map(async (gid) => {
-      analyses[gid] = await fetchAnalysis(currentClass.id, expNo, gid);
-    }));
-    return { expNo, groupIds, counts, analyses };
-  }));
-
-  const allGroupIds = [...new Set(perExp.flatMap((e) => e.groupIds))].sort();
-  loading.remove();
-
-  if (allGroupIds.length === 0) {
-    el.append(notice("아직 어느 모둠도 측정을 시작하지 않았어요."));
-    return;
-  }
-
-  const table = document.createElement("table");
-  table.className = "progress-table";
-  table.innerHTML = `
-    <thead>
-      <tr>
-        <th rowspan="2">모둠</th>
-        ${[1, 2, 3].map((n) => `<th colspan="3">실험 ${n} · ${EXP_LABELS[n]}</th>`).join("")}
-      </tr>
-      <tr>
-        ${[1, 2, 3].map(() => `<th>측정</th><th>진도</th><th>결론</th>`).join("")}
-      </tr>
-    </thead>
-    <tbody></tbody>
-  `;
-  const tbody = table.querySelector("tbody");
-
-  allGroupIds.forEach((gid) => {
-    const tr = document.createElement("tr");
-    let cells = `<td class="group-name">${groupLabel(gid)}</td>`;
-    perExp.forEach(({ counts, analyses }) => {
-      const count = counts[gid] || 0;
-      const analysis = analyses[gid];
-      const answered = analysis ? Object.values(analysis.answers || {}).filter((a) => (a || "").trim?.()).length : 0;
-      const hasConclusion = !!analysis?.conclusion?.trim?.();
-      const stepClass = answered === 0 ? "none" : answered >= TOTAL_STEPS ? "done" : "doing";
-      cells += `
-        <td>${count ? count + "건" : "—"}</td>
-        <td><span class="step-badge ${stepClass}">${answered}/${TOTAL_STEPS}</span></td>
-        <td>${hasConclusion ? "✅" : "—"}</td>
-      `;
-    });
-    tr.innerHTML = cells;
-    tbody.append(tr);
-  });
-
-  el.append(table);
-}
-
-// ── 2. 학급 종합 그래프 ──────────────────────────────────
-
-async function renderChartTab() {
-  const el = document.getElementById("tab-chart");
-  el.innerHTML = "";
-
-  const toolbar = document.createElement("div");
-  toolbar.className = "th-toolbar";
-  toolbar.innerHTML = `
-    <label for="chart-exp-select">실험 선택</label>
-    <select id="chart-exp-select">
-      <option value="1">실험 1 · 환기 주기</option>
-      <option value="2">실험 2 · 식물 광합성</option>
-      <option value="3">실험 3 · 운동과 몸</option>
-    </select>
-  `;
-  el.append(toolbar);
-
-  const chartWrap = document.createElement("div");
-  chartWrap.className = "chart-wrap";
-  const canvas = document.createElement("canvas");
-  chartWrap.append(canvas);
-  el.append(chartWrap);
-
-  const select = toolbar.querySelector("#chart-exp-select");
-  const draw = async () => {
-    const expNo = Number(select.value);
-    const datasets = await fetchClassDatasets(currentClass.id, expNo);
-    if (datasets.length === 0) {
-      chartWrap.innerHTML = `<p style="color:var(--dim)">아직 이 실험에 측정된 데이터가 없어요.</p>`;
-      return;
-    }
-    chartWrap.innerHTML = "";
-    chartWrap.append(canvas);
-    // 모둠마다 가장 최근 측정 1개씩만 겹쳐 그린다
-    const latestByGroup = new Map();
-    datasets.forEach((d) => {
-      const prev = latestByGroup.get(d.groupId);
-      const t = d.startedAt?.toDate ? d.startedAt.toDate().getTime() : new Date(d.startedAt).getTime();
-      if (!prev || t > prev._t) latestByGroup.set(d.groupId, { ...d, _t: t });
-    });
-    const first = [...latestByGroup.values()][0];
-    renderChart(canvas, {
-      type: "line",
-      datasets: [...latestByGroup.entries()].map(([gid, d]) => ({
-        label: groupLabel(gid), points: d.points || [],
-      })),
-      xLabel: "시간(분)",
-      yLabel: `${first.sensor} (${first.unit})`,
-      tooltip: { timeFormat: "mmss", valueLabel: first.sensor, valueUnit: first.unit },
-    });
-  };
-  select.addEventListener("change", draw);
-  await draw();
-}
-
-// ── 3. 데이터 관리 ───────────────────────────────────────
-
-async function renderManageTab() {
-  const el = document.getElementById("tab-manage");
-  el.innerHTML = "";
-
-  const activeBox = document.createElement("div");
-  activeBox.className = "th-toolbar";
-  activeBox.innerHTML = `<label>지금 진행 중인 실험</label>`;
-  [1, 2, 3].forEach((n) => {
-    const btn = document.createElement("button");
-    btn.className = "btn small" + (currentClass.activeExp === n ? "" : " ghost");
-    btn.textContent = `실험 ${n}로 전환`;
-    btn.addEventListener("click", async () => {
-      await setActiveExpField(currentClass.id, n);
-      currentClass.activeExp = n;
-      await renderManageTab();
-    });
-    activeBox.append(btn);
-  });
-  el.append(activeBox);
-
-  // 실험 탭 표시/숨김 (v2.0) — activeExp("지금 하는 실험")와는 다른 설정이다.
-  // 여기서 끈 실험은 학생 화면(index.html)의 탭 목록에서 아예 안 보인다.
-  const visibleBox = document.createElement("div");
-  visibleBox.className = "th-toolbar";
-  visibleBox.innerHTML = `<label>학생 화면에 보이는 실험 탭</label>`;
-  const visibleExps = getVisibleExps(currentClass);
-  [1, 2, 3, 4].forEach((n) => {
-    const wrap = document.createElement("label");
-    wrap.style.cssText = "display:inline-flex; align-items:center; gap:6px; margin-right:14px; font-size:14px;";
-    const checkbox = document.createElement("input");
-    checkbox.type = "checkbox";
-    checkbox.checked = visibleExps.includes(n);
-    checkbox.addEventListener("change", async () => {
-      const next = checkbox.checked
-        ? [...new Set([...getVisibleExps(currentClass), n])].sort()
-        : getVisibleExps(currentClass).filter((v) => v !== n);
-      await setVisibleExpsField(currentClass.id, next);
-      currentClass.visibleExps = next;
-      await renderManageTab();
-    });
-    const text = document.createElement("span");
-    text.textContent = `실험 ${n} · ${EXP_LABELS[n]}` + (n === 4 ? " (추가 실험 · 기본 꺼짐)" : "");
-    wrap.append(checkbox, text);
-    visibleBox.append(wrap);
-  });
-  el.append(visibleBox);
-
-  if (MODE === "mock") el.append(notice("🧪 연습 모드에서는 전환·삭제·표시 설정이 화면에만 반영되고 저장되지 않아요."));
-
-  const table = document.createElement("table");
-  table.className = "data-table";
-  table.innerHTML = `
-    <thead><tr><th>실험</th><th>모둠</th><th>제목</th><th>측정 시각</th><th>점 개수</th><th></th></tr></thead>
-    <tbody></tbody>
-  `;
-  const tbody = table.querySelector("tbody");
-  el.append(table);
-
-  const all = (await Promise.all([1, 2, 3].map((n) => fetchClassDatasets(currentClass.id, n)))).flat();
-  if (all.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="6">아직 측정된 데이터가 없어요.</td></tr>`;
-    return;
-  }
-  all.forEach((d) => {
-    const tr = document.createElement("tr");
-    const when = d.startedAt?.toDate ? d.startedAt.toDate() : new Date(d.startedAt);
-    tr.innerHTML = `
-      <td>실험 ${d.expNo}</td>
-      <td>${groupLabel(d.groupId)}</td>
-      <td>${d.title || "(제목 없음)"}</td>
-      <td>${isNaN(when) ? "—" : when.toLocaleString("ko-KR")}</td>
-      <td>${d.points?.length ?? 0}</td>
-      <td><button class="btn tiny ghost">삭제</button></td>
-    `;
-    tr.querySelector("button").addEventListener("click", async () => {
-      if (!confirm("이 측정을 지울까요? 되돌릴 수 없어요.")) return;
-      await deleteDatasetDoc(currentClass.id, d.id);
-      tr.remove();
-    });
-    tbody.append(tr);
-  });
-}
-
-// ── 4. 교실 화면용 실시간 뷰 ─────────────────────────────
-
-let tvTimer = null;
-
-async function renderTvTab() {
-  const el = document.getElementById("tab-tv");
-  el.innerHTML = "";
-
-  const enterBtn = document.createElement("button");
-  enterBtn.className = "btn big";
-  enterBtn.textContent = "교실 화면 모드로 보기 (전체화면)";
-  enterBtn.addEventListener("click", () => openTvView());
-  el.append(enterBtn);
-}
-
-async function openTvView() {
-  const view = document.createElement("div");
-  view.className = "tv-view";
-  view.innerHTML = `
-    <button class="btn ghost tv-exit">닫기</button>
-    <h1>${currentClass.name || "우리 반"} · 지금 실험 ${currentClass.activeExp ?? "—"}</h1>
-    <div class="tv-grid"></div>
-  `;
-  document.body.append(view);
-  view.querySelector(".tv-exit").addEventListener("click", closeTv);
-  if (view.requestFullscreen) view.requestFullscreen().catch(() => {});
-
-  async function refresh() {
-    const expNo = currentClass.activeExp || 1;
-    const datasets = await fetchClassDatasets(currentClass.id, expNo);
-    const counts = {};
-    datasets.forEach((d) => { counts[d.groupId] = (counts[d.groupId] || 0) + 1; });
-    const grid = view.querySelector(".tv-grid");
-    const groupIds = [...new Set(datasets.map((d) => d.groupId))].sort();
-    grid.innerHTML = groupIds.length
-      ? groupIds.map((gid) => `
-        <div class="tv-card">
-          <div class="tv-group">${groupLabel(gid)}</div>
-          <div class="tv-count">${counts[gid]}</div>
-          <div class="tv-label">번 측정했어요</div>
-        </div>
-      `).join("")
-      : `<p>아직 측정된 데이터가 없어요.</p>`;
-  }
-
-  function closeTv() {
-    clearInterval(tvTimer);
-    if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
-    view.remove();
-  }
-
-  await refresh();
-  tvTimer = setInterval(refresh, 30000); // 30초마다 갱신
-}
-
-// ── 도우미 ───────────────────────────────────────────────
-
-function notice(text) {
-  const box = document.createElement("div");
-  box.className = "th-notice";
-  box.textContent = text;
-  return box;
 }
