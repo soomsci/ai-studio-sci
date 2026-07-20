@@ -15,10 +15,15 @@
   .row { display: flex; gap: 8px; }
   .row > * { flex: 1; }
   #status-msg { margin-top: 10px; font-size: 0.9rem; white-space: pre-wrap; }
-  #point-count { font-weight: bold; }
   .tabs { display: flex; gap: 8px; margin-bottom: 8px; }
   .tabs button { flex: 1; }
   .tabs button.active { background: #333; color: #fff; }
+  .hint { font-size: 0.85rem; color: #777; margin-top: 2px; }
+  .mode-choice { display: flex; gap: 12px; margin-top: 8px; }
+  .channel-list { list-style: none; padding: 0; margin-top: 12px; }
+  .channel-list li { border: 1px solid #eee; border-radius: 6px; padding: 10px; margin-bottom: 8px; }
+  .channel-list .num { display: inline-block; font-weight: bold; font-family: monospace; background: #333; color: #fff; padding: 2px 6px; border-radius: 4px; margin-right: 6px; }
+  .channel-list .val { float: right; color: #080; font-weight: bold; }
 </style>
 </head>
 <body>
@@ -38,40 +43,55 @@
       <option value="3">실험 3 — 운동과 우리 몸</option>
     </select>
   </label>
-  <label>센서
-    <select id="sensorSelect">
-      <optgroup label="바로 연결하는 센서">
-        {% for s in sensors.realtime %}
-        <option value="{{ s.name }}">{{ s.name }} ({{ s.unit }})</option>
-        {% endfor %}
-      </optgroup>
-      <optgroup label="직접 입력하는 센서 (심박수·폐활량)">
+  <label>조건 라벨 <input id="condition" placeholder="예: 가열"></label>
+  <label>측정 간격(초) <input id="intervalSec" type="number" value="10" min="1"></label>
+
+  <label>측정 방법</label>
+  <div class="mode-choice">
+    <label><input type="radio" name="mode" value="realtime" checked style="width:auto"> 센서로 실시간 측정</label>
+    <label><input type="radio" name="mode" value="manual" style="width:auto"> 손으로 값 입력 (심박수·폐활량)</label>
+  </div>
+
+  <div id="manual-setup" hidden>
+    <label>센서
+      <select id="manualSensorSelect">
         {% for s in sensors.manual_only %}
         <option value="{{ s.name }}">{{ s.name }} ({{ s.unit }})</option>
         {% endfor %}
-      </optgroup>
-    </select>
-  </label>
-  <label>측정 제목 <input id="title" placeholder="예: 3교시 창문 닫음"></label>
-  <label>조건 라벨 <input id="condition" placeholder="예: 닫음"></label>
-  <label>측정 간격(초) <input id="intervalSec" type="number" value="10" min="1"></label>
+      </select>
+    </label>
+    <label>측정 제목 <input id="manualTitle" placeholder="예: 4모둠 심박수"></label>
+  </div>
+
   <button id="btnSetup">다음</button>
   <div id="setup-msg" style="margin-top:8px;color:#b00;"></div>
 </section>
 
-<section id="realtime" hidden>
-  <h2>2. 센서 연결하고 측정하기</h2>
-  <p>센서 전원을 켜고 아래 버튼을 눌러 연결하세요.</p>
-  <button id="btnConnect">센서 연결</button>
+<section id="channels" hidden>
+  <h2>2. 센서 연결하기</h2>
+  <p class="hint">센서 몸통에 적힌 번호를 그대로 입력하세요(예: 117-880). 여러 대를
+     동시에 재려면(예: 물·식용유 온도 비교) 이 칸에서 한 대씩 추가하면 돼요.</p>
+  <select id="channelSensorType">
+    {% for s in sensors.realtime %}
+    <option value="{{ s.name }}">{{ s.name }} ({{ s.unit }})</option>
+    {% endfor %}
+  </select>
+  <label>센서 번호 <input id="channelDeviceId" placeholder="예: 117-880"></label>
+  <label>이름표 <input id="channelLabel" placeholder="예: 물"></label>
+  <label>제목(자동으로 채워져요, 고칠 수 있어요) <input id="channelTitle" placeholder="예: 물(117-880)"></label>
+  <button id="btnAddChannel">센서 연결하기</button>
+  <div id="channel-msg" style="margin-top:8px;color:#b00;"></div>
+
+  <ul class="channel-list" id="channelList"></ul>
+
   <div class="row">
-    <button id="btnStart" disabled>측정 시작</button>
+    <button id="btnStart" disabled>모든 센서 측정 시작</button>
     <button id="btnStop" disabled>측정 종료</button>
   </div>
-  <label>이 순간을 기록해 두고 싶다면(예: 창문 열기)
-    <input id="eventLabel" placeholder="예: 창문 열기">
+  <label>이 순간을 모든 센서에 함께 기록하고 싶다면(예: 가열 시작)
+    <input id="eventLabel" placeholder="예: 가열 시작">
   </label>
   <button id="btnEvent" disabled>이 순간 기록하기</button>
-  <p>모은 값: <span id="point-count">0</span>개</p>
 </section>
 
 <section id="manual" hidden>
@@ -101,7 +121,8 @@
 
 <section id="upload" hidden>
   <h2>3. 서버로 보내기</h2>
-  <p>측정을 마쳤으면 아래 버튼으로 보내세요. 보내고 나면 되돌릴 수 없어요.</p>
+  <p>측정을 마쳤으면 아래 버튼으로 보내세요. 센서가 여러 대면 센서마다 따로
+     올라가요. 보내고 나면 되돌릴 수 없어요.</p>
   <button id="btnUpload">서버로 보내기</button>
 </section>
 
@@ -109,7 +130,8 @@
 
 <script>
 const $ = (id) => document.getElementById(id);
-let realtimeMode = null; // true=바로 연결, false=직접 입력/CSV
+let mode = null; // "realtime" | "manual"
+let titleEdited = false;
 
 async function postJson(url, body) {
   const res = await fetch(url, {
@@ -126,57 +148,97 @@ function showMsg(text, isError) {
   el.style.color = isError ? "#b00" : "#080";
 }
 
+document.querySelectorAll('input[name="mode"]').forEach((el) => {
+  el.addEventListener("change", () => {
+    const chosen = document.querySelector('input[name="mode"]:checked').value;
+    $("manual-setup").hidden = chosen !== "manual";
+  });
+});
+
 $("btnSetup").addEventListener("click", async () => {
+  const chosenMode = document.querySelector('input[name="mode"]:checked').value;
   const payload = {
     classId: $("classId").value,
     groupId: $("groupId").value,
     expNo: $("expNo").value,
-    sensor: $("sensorSelect").value,
-    title: $("title").value,
     condition: $("condition").value,
     intervalSec: $("intervalSec").value,
+    mode: chosenMode,
+    sensor: $("manualSensorSelect").value,
+    title: $("manualTitle").value,
   };
   const result = await postJson("/api/setup", payload);
-  if (!result.ok) {
-    $("setup-msg").textContent = result.error;
-    return;
-  }
+  if (!result.ok) { $("setup-msg").textContent = result.error; return; }
   $("setup-msg").textContent = "";
-  realtimeMode = result.realtime;
-  $("realtime").hidden = !realtimeMode;
-  $("manual").hidden = realtimeMode;
+  mode = result.mode;
+  $("channels").hidden = mode !== "realtime";
+  $("manual").hidden = mode !== "manual";
   $("upload").hidden = false;
-  showMsg("측정 정보를 저장했어요. 이제 측정을 시작하세요.");
+  showMsg("측정 정보를 저장했어요. 이제 센서를 연결하거나 값을 입력하세요.");
 });
 
-// ── 실시간 센서 ─────────────────────────────
-$("btnConnect").addEventListener("click", async () => {
-  const result = await postJson("/api/connect");
-  if (!result.ok) { showMsg(result.error, true); return; }
-  $("btnStart").disabled = false;
-  showMsg("센서를 연결했어요.");
+// ── 실시간 센서: 채널 추가 ─────────────────────
+function autoFillTitle() {
+  if (titleEdited) return;
+  const label = $("channelLabel").value.trim();
+  const deviceId = $("channelDeviceId").value.trim();
+  $("channelTitle").value = label && deviceId ? `${label}(${deviceId})` : "";
+}
+$("channelLabel").addEventListener("input", autoFillTitle);
+$("channelDeviceId").addEventListener("input", autoFillTitle);
+$("channelTitle").addEventListener("input", () => { titleEdited = true; });
+
+function renderChannels(channels) {
+  const list = $("channelList");
+  list.innerHTML = "";
+  channels.forEach((ch) => {
+    const li = document.createElement("li");
+    const value = ch.latestValue == null ? "" : `${ch.latestValue} ${ch.unit}`;
+    li.innerHTML = `<span class="num">${ch.deviceId}</span>${ch.label} — ${ch.title}` +
+      `<span class="val">${value}</span>`;
+    list.appendChild(li);
+  });
+  $("btnStart").disabled = channels.length === 0;
+}
+
+$("btnAddChannel").addEventListener("click", async () => {
+  const result = await postJson("/api/channels", {
+    sensorType: $("channelSensorType").value,
+    deviceId: $("channelDeviceId").value,
+    label: $("channelLabel").value,
+    title: $("channelTitle").value,
+  });
+  if (!result.ok) { $("channel-msg").textContent = result.error; return; }
+  $("channel-msg").textContent = "";
+  renderChannels(result.channels);
+  $("channelDeviceId").value = "";
+  $("channelLabel").value = "";
+  $("channelTitle").value = "";
+  titleEdited = false;
+  showMsg("센서를 연결했어요. 이어서 다음 센서를 추가하거나 측정을 시작하세요.");
 });
 
+// ── 실시간 센서: 측정 시작·종료·이벤트 (모든 채널 공통) ──
 $("btnStart").addEventListener("click", async () => {
   const result = await postJson("/api/start");
   if (!result.ok) { showMsg(result.error, true); return; }
   $("btnStop").disabled = false;
   $("btnEvent").disabled = false;
-  showMsg("측정을 시작했어요.");
+  showMsg("모든 센서에서 측정을 시작했어요.");
   pollStatus();
 });
 
 $("btnStop").addEventListener("click", async () => {
   const result = await postJson("/api/stop");
   if (!result.ok) { showMsg(result.error, true); return; }
-  showMsg(`측정을 마쳤어요. ${result.count}개 모았어요.`);
+  showMsg("측정을 마쳤어요.");
 });
 
 $("btnEvent").addEventListener("click", async () => {
   const label = $("eventLabel").value;
   const result = await postJson("/api/event", { label });
   if (!result.ok) { showMsg(result.error, true); return; }
-  showMsg(`"${label}" 기록했어요.`);
+  showMsg(`"${label}"을(를) 모든 센서에 기록했어요.`);
   $("eventLabel").value = "";
 });
 
@@ -186,14 +248,14 @@ function pollStatus() {
   pollTimer = setInterval(async () => {
     const res = await fetch("/api/status");
     const data = await res.json();
-    if (data.ok) {
-      $("point-count").textContent = data.points.length;
+    if (data.ok && data.channels) {
+      renderChannels(data.channels);
       if (data.status !== "measuring") clearInterval(pollTimer);
     }
   }, 2000);
 }
 
-// ── 직접 입력 ────────────────────────────────
+// ── 수동 입력(심박수·폐활량) ────────────────────
 $("tabDirect").addEventListener("click", () => {
   $("tabDirect").classList.add("active");
   $("tabCsv").classList.remove("active");
@@ -248,7 +310,12 @@ $("btnCsvUpload").addEventListener("click", async () => {
 $("btnUpload").addEventListener("click", async () => {
   const result = await postJson("/api/upload");
   if (!result.ok) { showMsg(result.error, true); return; }
-  showMsg(`서버로 보냈어요! (문서 아이디: ${result.datasetId})`);
+  if (result.results) {
+    const lines = result.results.map((r) => `${r.label}(${r.deviceId}) → ${r.datasetId}`);
+    showMsg(`서버로 보냈어요!\n${lines.join("\n")}`);
+  } else {
+    showMsg(`서버로 보냈어요! (문서 아이디: ${result.datasetId})`);
+  }
 });
 </script>
 </body>

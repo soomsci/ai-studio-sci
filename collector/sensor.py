@@ -61,6 +61,7 @@ class PascoSensorSource:
         self.sensor_name = sensor_name
         self.measurement = PASCO_SENSORS[sensor_name]["measurement"]
         self.unit = PASCO_SENSORS[sensor_name]["unit"]
+        self.device_id: str | None = None
         self._device = None
         self._points: list[dict] = []
         self._events: list[dict] = []
@@ -68,24 +69,47 @@ class PascoSensorSource:
         self._stop_flag = threading.Event()
         self._thread: threading.Thread | None = None
 
-    def connect(self, device_id: str | None = None) -> None:
-        """블루투스로 센서를 찾아 연결한다. device_id를 주면 스캔 없이 바로 연결한다.
-        ⚠ 센서 입수 후 실제 연결 테스트 필요."""
-        # pasco가 설치되지 않은 환경(예: 센서 없이 대안 경로만 쓰는 경우)에서도
-        # 이 모듈 자체는 import되어야 하므로 지연 import한다.
+    def connect(self, device_id: str) -> None:
+        """센서 번호(예: "117-880", 센서 몸통에 인쇄된 번호)로 정확히 지정해 연결한다.
+        ⚠ 센서 입수 후 실제 연결 테스트 필요.
+
+        스캔 결과 중 첫 번째(found[0])를 그냥 연결하는 방식은 쓰지 않는다 — 같은 스캔을
+        두 번 돌리면 순서가 뒤집힐 수 있어서, 여러 센서를 동시에 쓸 때(예: 물·식용유
+        온도 비교) 엉뚱한 센서에 붙어 남의 데이터를 기록할 위험이 있다.
+        """
+        if not device_id:
+            raise SensorConnectionError("센서 번호를 입력해야 합니다")
+
+        # pasco.pasco_ble_device를 맨 처음 import할 때 클래스 안에서 nest_asyncio.apply()가
+        # 실행되는데, 이건 현재 스레드에 asyncio 이벤트 루프가 있어야 한다. main.py는 Flask
+        # 요청을 메인 스레드가 아닌 별도 스레드에서 처리하므로, 루프가 없으면 여기서 바로
+        # "There is no current event loop in thread ..." 로 죽는다(실제 서버 실행으로 재현·확인함).
+        # 각 채널(PASCOBLEDevice 인스턴스)이 갖는 통신용 루프(asyncio.new_event_loop())와는
+        # 별개 문제 — 이건 import 시점 1회성 문제라서 매번 확인만 하면 된다.
+        import asyncio
+
+        try:
+            asyncio.get_event_loop()
+        except RuntimeError:
+            asyncio.set_event_loop(asyncio.new_event_loop())
+
         from pasco.pasco_ble_device import PASCOBLEDevice
 
         self._device = PASCOBLEDevice()
         try:
-            if device_id:
-                self._device.connect_by_id(device_id)
-            else:
-                found = self._device.scan(self.sensor_name)
-                if not found:
-                    raise SensorConnectionError(f"{self.sensor_name} 센서를 찾지 못했습니다")
-                self._device.connect(found[0])
-        except (self._device.BLEScanFailed, self._device.BLEConnectionError, self._device.SensorNotFound) as exc:
-            raise SensorConnectionError(f"{self.sensor_name} 센서 연결 실패: {exc}") from exc
+            self._device.connect_by_id(device_id)
+        except (self._device.BLEConnectionError, self._device.BLEScanFailed, self._device.SensorNotFound) as exc:
+            raise SensorConnectionError(f"{self.sensor_name} 센서({device_id}) 연결 실패: {exc}") from exc
+
+        # connect_by_id는 번호를 부분 문자열로 찾는다(pasco 내부 구현). 실제로 연결된
+        # 센서의 번호(serial_id)를 다시 확인해서, 혹시 다른 센서가 잡혔다면 걸러낸다.
+        actual_id = self._device.serial_id
+        if actual_id and actual_id != device_id:
+            self._device.disconnect()
+            raise SensorConnectionError(
+                f"입력한 번호({device_id})와 실제 연결된 센서 번호({actual_id})가 다릅니다"
+            )
+        self.device_id = actual_id or device_id
 
     def is_connected(self) -> bool:
         return bool(self._device and self._device.is_connected())
