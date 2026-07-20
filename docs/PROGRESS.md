@@ -808,6 +808,28 @@ CLAUDE.md의 "작업 방식 — 토큰·비용 절약"을 지켜라.
   build.spec에 firebase-admin 관련 설정이 있으면 같이 정리해라.
 ```
 
+#### ⑩-c 선행 검증 완료 (2026-07-21, 세션 G)
+
+세션 F가 코드를 쓰기 전에 **B 방식이 실제로 통하는지 끝까지 확인했다.** 새로 만든 수집기 전용 키로 curl만 써서 시험한 결과:
+
+| 시도 | 기대 | 결과 |
+|---|---|---|
+| 리퍼러 없이 익명 로그인 | 성공 | ✅ `idToken` 발급됨 |
+| 그 토큰으로 정상 문서 쓰기(expNo=4) | 성공 | ✅ 저장됨 |
+| 남의 uid를 `ownerUid`로 쓰기 | 거부 | ✅ `PERMISSION_DENIED` |
+| `points` 6,000개 쓰기 | 거부 | ✅ `PERMISSION_DENIED` |
+| `expNo: 9` 쓰기 | 거부 | ✅ `PERMISSION_DENIED` |
+
+**즉 B로 바꾸면 수집기가 웹앱 학생과 똑같이 보안 규칙의 통제를 받는다.** 서비스 계정 키처럼 규칙을 우회하지 못한다. 검증용으로 만든 문서는 삭제했다.
+
+Firestore REST 쓰기 주소(세션 F 참고):
+```
+POST https://firestore.googleapis.com/v1/projects/ai-science-data-studio
+     /databases/(default)/documents/classes/{classId}/datasets
+헤더  Authorization: Bearer {idToken}
+본문  {"fields": { ... 타입 명시 형식 ... }}
+```
+
 #### ⑩-b 사용자 콘솔 작업 — 수집기 전용 API 키 만들기
 
 1. https://console.cloud.google.com/apis/credentials?project=ai-science-data-studio
