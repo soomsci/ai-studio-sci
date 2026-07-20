@@ -29,13 +29,19 @@
 <body>
 
 <h1>센서 측정 도구</h1>
-<p>모둠이 측정을 시작하기 전에 아래 정보를 채워 주세요. 학급 아이디·모둠 아이디는
-   선생님이나 교사 화면에서 확인할 수 있어요.</p>
+<p>모둠이 측정을 시작하기 전에 아래 정보를 채워 주세요. 학급 코드는 웹앱에
+   입장할 때 쓴 것과 같아요.</p>
 
 <section id="setup">
   <h2>1. 측정 정보 입력</h2>
-  <label>학급 아이디 <input id="classId" placeholder="예: cls_3ban_2026"></label>
-  <label>모둠 아이디 <input id="groupId" placeholder="예: group-4"></label>
+  <label>학급 코드 <input id="joinCode" placeholder="예: TEST-1"></label>
+  <label>모둠
+    <select id="groupNo">
+      {% for n in range(1, 9) %}
+      <option value="{{ n }}">{{ n }}모둠</option>
+      {% endfor %}
+    </select>
+  </label>
   <label>실험 번호
     <select id="expNo">
       <option value="1">실험 1 — 환기 주기</option>
@@ -65,6 +71,7 @@
 
   <button id="btnSetup">다음</button>
   <div id="setup-msg" style="margin-top:8px;color:#b00;"></div>
+  <div id="class-confirm" style="margin-top:8px;color:#080;font-weight:bold;"></div>
 </section>
 
 <section id="channels" hidden>
@@ -158,8 +165,8 @@ document.querySelectorAll('input[name="mode"]').forEach((el) => {
 $("btnSetup").addEventListener("click", async () => {
   const chosenMode = document.querySelector('input[name="mode"]:checked').value;
   const payload = {
-    classId: $("classId").value,
-    groupId: $("groupId").value,
+    joinCode: $("joinCode").value,
+    groupNo: $("groupNo").value,
     expNo: $("expNo").value,
     condition: $("condition").value,
     intervalSec: $("intervalSec").value,
@@ -167,9 +174,13 @@ $("btnSetup").addEventListener("click", async () => {
     sensor: $("manualSensorSelect").value,
     title: $("manualTitle").value,
   };
+  $("class-confirm").textContent = "";
+  $("btnSetup").disabled = true;
   const result = await postJson("/api/setup", payload);
+  $("btnSetup").disabled = false;
   if (!result.ok) { $("setup-msg").textContent = result.error; return; }
   $("setup-msg").textContent = "";
+  $("class-confirm").textContent = `"${result.className}"에 올립니다. 학급이 맞는지 확인하세요.`;
   mode = result.mode;
   $("channels").hidden = mode !== "realtime";
   $("manual").hidden = mode !== "manual";

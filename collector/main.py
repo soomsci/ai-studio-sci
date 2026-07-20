@@ -76,7 +76,14 @@ def index():
 
 @app.route("/api/setup", methods=["POST"])
 def api_setup():
-    """학급·모둠·실험번호·조건·측정 간격(공유 값)을 정하고 측정 방법을 고른다."""
+    """학급 코드·모둠 번호·실험번호·조건·측정 간격(공유 값)을 정하고 측정 방법을 고른다.
+
+    학급 아이디를 직접 입력받지 않는다 — 사람이 옮겨 적을 수 없는 문자열이라
+    오타가 나고, Firestore는 없는 학급 밑에도 조용히 문서를 만들어 버려서
+    측정이 통째로 사라진 것처럼 된다(§5.2 v2.2). 그래서 웹앱과 똑같이 학급
+    코드로 joinCodes → classes를 조회해 실제로 있는 학급인지 여기서 먼저
+    확인한다(측정 시작 전에 — 45분 재고 나서 알면 너무 늦다).
+    """
     data = request.get_json(force=True) or {}
     try:
         exp_no = int(data.get("expNo", 0))
@@ -87,12 +94,29 @@ def api_setup():
     if mode not in ("realtime", "manual"):
         return jsonify(ok=False, error="측정 방법을 골라야 합니다"), 400
 
+    join_code = (data.get("joinCode") or "").strip()
+    try:
+        group_no = int(data.get("groupNo", 0))
+    except (TypeError, ValueError):
+        return jsonify(ok=False, error="모둠을 골라 주세요"), 400
+    if not join_code:
+        return jsonify(ok=False, error="학급 코드를 입력하세요"), 400
+    if not (1 <= group_no <= 8):
+        return jsonify(ok=False, error="모둠을 골라 주세요"), 400
+
+    try:
+        config = uploader.load_config()
+        id_token, _local_id = uploader.sign_in_anonymously(config["apiKey"])
+        class_info = uploader.lookup_class_by_join_code(id_token, config["projectId"], join_code)
+    except uploader.UploadError as exc:
+        return jsonify(ok=False, error=str(exc)), 400
+
     with LOCK:
         SESSION.reset()
         SESSION.meta = {
-            "class_id": (data.get("classId") or "").strip(),
-            "group_id": (data.get("groupId") or "").strip(),
-            "owner_uid": (data.get("ownerUid") or "").strip() or f"collector-{os.getpid()}",
+            "class_id": class_info["classId"],
+            "group_id": f"g{group_no}",
+            "owner_uid": f"collector-{os.getpid()}",  # 업로드 시점에 실제 로그인 결과로 덮어씀
             "exp_no": exp_no,
             "condition": (data.get("condition") or "").strip(),
             "interval_sec": float(data.get("intervalSec") or 10),
@@ -108,7 +132,7 @@ def api_setup():
             SESSION.manual_source = sensor.ManualInputSource(name)
             SESSION.manual_sensor_name = name
 
-    return jsonify(ok=True, mode=mode)
+    return jsonify(ok=True, mode=mode, className=class_info["className"])
 
 
 @app.route("/api/channels", methods=["POST"])

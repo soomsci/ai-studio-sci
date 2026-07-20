@@ -214,6 +214,47 @@ def sign_in_anonymously(api_key: str) -> tuple[str, str]:
     return body["idToken"], body["localId"]
 
 
+def lookup_class_by_join_code(id_token: str, project_id: str, join_code: str) -> dict:
+    """학급 코드로 학급을 찾는다. js/auth.js의 join()과 같은 절차 —
+    joinCodes/{코드} 문서 하나만 읽어 classId를 얻고, classes/{classId}에서
+    이름을 읽는다(§5.3). classId를 사람이 직접 입력하게 하면 오타가 나고,
+    Firestore는 없는 학급 밑에도 조용히 문서를 만들어 버리므로(§5.2 v2.2),
+    측정을 시작하기 전에 여기서 미리 확인해야 한다.
+
+    반환: {"classId": ..., "className": ...}. 코드가 없으면 UploadError.
+    """
+    requests = _requests_module()
+    base = f"https://firestore.googleapis.com/v1/projects/{quote(project_id, safe='')}/databases/(default)/documents"
+    headers = {"Authorization": f"Bearer {id_token}"}
+
+    try:
+        res = requests.get(f"{base}/joinCodes/{quote(join_code, safe='')}", headers=headers, timeout=15)
+    except requests.RequestException as exc:
+        raise UploadError(f"서버에 연결하지 못했습니다. 인터넷 연결을 확인하세요. ({exc})") from exc
+
+    if res.status_code == 404:
+        raise UploadError("그런 학급 코드가 없어요. 선생님께 다시 확인해 주세요.")
+    if res.status_code != 200:
+        raise UploadError(_friendly_write_error(res))
+
+    class_id = res.json().get("fields", {}).get("classId", {}).get("stringValue")
+    if not class_id:
+        raise UploadError("학급 코드 정보가 올바르지 않아요. 선생님께 알려 주세요.")
+
+    try:
+        res = requests.get(f"{base}/classes/{quote(class_id, safe='')}", headers=headers, timeout=15)
+    except requests.RequestException as exc:
+        raise UploadError(f"서버에 연결하지 못했습니다. 인터넷 연결을 확인하세요. ({exc})") from exc
+
+    if res.status_code == 404:
+        raise UploadError("학급 정보가 없어요. 선생님께 알려 주세요.")
+    if res.status_code != 200:
+        raise UploadError(_friendly_write_error(res))
+
+    class_name = res.json().get("fields", {}).get("name", {}).get("stringValue", "")
+    return {"classId": class_id, "className": class_name}
+
+
 def _friendly_write_error(res) -> str:
     message = _error_message(res)
     if res.status_code in (401, 403):
