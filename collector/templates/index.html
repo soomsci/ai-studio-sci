@@ -1,0 +1,255 @@
+<!-- collector/templates/index.html — 세션 F: 로컬 측정 도구 화면 -->
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>과학 데이터 스튜디오 — 센서 측정 도구</title>
+<style>
+  body { font-family: -apple-system, "Malgun Gothic", sans-serif; max-width: 640px; margin: 24px auto; padding: 0 16px; color: #222; }
+  h1 { font-size: 1.3rem; }
+  section { border: 1px solid #ddd; border-radius: 8px; padding: 16px; margin-bottom: 16px; }
+  section[hidden] { display: none; }
+  label { display: block; margin-top: 10px; font-size: 0.9rem; color: #444; }
+  input, select { width: 100%; padding: 8px; margin-top: 4px; box-sizing: border-box; font-size: 1rem; }
+  button { margin-top: 12px; padding: 10px 16px; font-size: 1rem; cursor: pointer; }
+  .row { display: flex; gap: 8px; }
+  .row > * { flex: 1; }
+  #status-msg { margin-top: 10px; font-size: 0.9rem; white-space: pre-wrap; }
+  #point-count { font-weight: bold; }
+  .tabs { display: flex; gap: 8px; margin-bottom: 8px; }
+  .tabs button { flex: 1; }
+  .tabs button.active { background: #333; color: #fff; }
+</style>
+</head>
+<body>
+
+<h1>센서 측정 도구</h1>
+<p>모둠이 측정을 시작하기 전에 아래 정보를 채워 주세요. 학급 아이디·모둠 아이디는
+   선생님이나 교사 화면에서 확인할 수 있어요.</p>
+
+<section id="setup">
+  <h2>1. 측정 정보 입력</h2>
+  <label>학급 아이디 <input id="classId" placeholder="예: cls_3ban_2026"></label>
+  <label>모둠 아이디 <input id="groupId" placeholder="예: group-4"></label>
+  <label>실험 번호
+    <select id="expNo">
+      <option value="1">실험 1 — 환기 주기</option>
+      <option value="2">실험 2 — 식물 최적 조건</option>
+      <option value="3">실험 3 — 운동과 우리 몸</option>
+    </select>
+  </label>
+  <label>센서
+    <select id="sensorSelect">
+      <optgroup label="바로 연결하는 센서">
+        {% for s in sensors.realtime %}
+        <option value="{{ s.name }}">{{ s.name }} ({{ s.unit }})</option>
+        {% endfor %}
+      </optgroup>
+      <optgroup label="직접 입력하는 센서 (심박수·폐활량)">
+        {% for s in sensors.manual_only %}
+        <option value="{{ s.name }}">{{ s.name }} ({{ s.unit }})</option>
+        {% endfor %}
+      </optgroup>
+    </select>
+  </label>
+  <label>측정 제목 <input id="title" placeholder="예: 3교시 창문 닫음"></label>
+  <label>조건 라벨 <input id="condition" placeholder="예: 닫음"></label>
+  <label>측정 간격(초) <input id="intervalSec" type="number" value="10" min="1"></label>
+  <button id="btnSetup">다음</button>
+  <div id="setup-msg" style="margin-top:8px;color:#b00;"></div>
+</section>
+
+<section id="realtime" hidden>
+  <h2>2. 센서 연결하고 측정하기</h2>
+  <p>센서 전원을 켜고 아래 버튼을 눌러 연결하세요.</p>
+  <button id="btnConnect">센서 연결</button>
+  <div class="row">
+    <button id="btnStart" disabled>측정 시작</button>
+    <button id="btnStop" disabled>측정 종료</button>
+  </div>
+  <label>이 순간을 기록해 두고 싶다면(예: 창문 열기)
+    <input id="eventLabel" placeholder="예: 창문 열기">
+  </label>
+  <button id="btnEvent" disabled>이 순간 기록하기</button>
+  <p>모은 값: <span id="point-count">0</span>개</p>
+</section>
+
+<section id="manual" hidden>
+  <h2>2. 값 넣기</h2>
+  <div class="tabs">
+    <button id="tabDirect" class="active">직접 입력</button>
+    <button id="tabCsv">CSV 파일 올리기</button>
+  </div>
+
+  <div id="pane-direct">
+    <button id="btnManualStart">시작</button>
+    <label>측정값 <input id="manualValue" type="number" step="any"></label>
+    <button id="btnManualAdd" disabled>이 값 추가</button>
+    <label>이 순간을 기록해 두고 싶다면
+      <input id="eventLabel2" placeholder="예: 운동 시작">
+    </label>
+    <button id="btnEvent2" disabled>이 순간 기록하기</button>
+    <p>모은 값: <span id="point-count2">0</span>개</p>
+  </div>
+
+  <div id="pane-csv" hidden>
+    <p>첫 줄이 <code>t,v</code>인 CSV 파일을 올려 주세요. (t=측정 시작 후 지난 초, v=측정값)</p>
+    <input id="csvFile" type="file" accept=".csv">
+    <button id="btnCsvUpload">CSV 올리기</button>
+  </div>
+</section>
+
+<section id="upload" hidden>
+  <h2>3. 서버로 보내기</h2>
+  <p>측정을 마쳤으면 아래 버튼으로 보내세요. 보내고 나면 되돌릴 수 없어요.</p>
+  <button id="btnUpload">서버로 보내기</button>
+</section>
+
+<div id="status-msg"></div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let realtimeMode = null; // true=바로 연결, false=직접 입력/CSV
+
+async function postJson(url, body) {
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body || {}),
+  });
+  return res.json();
+}
+
+function showMsg(text, isError) {
+  const el = $("status-msg");
+  el.textContent = text;
+  el.style.color = isError ? "#b00" : "#080";
+}
+
+$("btnSetup").addEventListener("click", async () => {
+  const payload = {
+    classId: $("classId").value,
+    groupId: $("groupId").value,
+    expNo: $("expNo").value,
+    sensor: $("sensorSelect").value,
+    title: $("title").value,
+    condition: $("condition").value,
+    intervalSec: $("intervalSec").value,
+  };
+  const result = await postJson("/api/setup", payload);
+  if (!result.ok) {
+    $("setup-msg").textContent = result.error;
+    return;
+  }
+  $("setup-msg").textContent = "";
+  realtimeMode = result.realtime;
+  $("realtime").hidden = !realtimeMode;
+  $("manual").hidden = realtimeMode;
+  $("upload").hidden = false;
+  showMsg("측정 정보를 저장했어요. 이제 측정을 시작하세요.");
+});
+
+// ── 실시간 센서 ─────────────────────────────
+$("btnConnect").addEventListener("click", async () => {
+  const result = await postJson("/api/connect");
+  if (!result.ok) { showMsg(result.error, true); return; }
+  $("btnStart").disabled = false;
+  showMsg("센서를 연결했어요.");
+});
+
+$("btnStart").addEventListener("click", async () => {
+  const result = await postJson("/api/start");
+  if (!result.ok) { showMsg(result.error, true); return; }
+  $("btnStop").disabled = false;
+  $("btnEvent").disabled = false;
+  showMsg("측정을 시작했어요.");
+  pollStatus();
+});
+
+$("btnStop").addEventListener("click", async () => {
+  const result = await postJson("/api/stop");
+  if (!result.ok) { showMsg(result.error, true); return; }
+  showMsg(`측정을 마쳤어요. ${result.count}개 모았어요.`);
+});
+
+$("btnEvent").addEventListener("click", async () => {
+  const label = $("eventLabel").value;
+  const result = await postJson("/api/event", { label });
+  if (!result.ok) { showMsg(result.error, true); return; }
+  showMsg(`"${label}" 기록했어요.`);
+  $("eventLabel").value = "";
+});
+
+let pollTimer = null;
+function pollStatus() {
+  if (pollTimer) clearInterval(pollTimer);
+  pollTimer = setInterval(async () => {
+    const res = await fetch("/api/status");
+    const data = await res.json();
+    if (data.ok) {
+      $("point-count").textContent = data.points.length;
+      if (data.status !== "measuring") clearInterval(pollTimer);
+    }
+  }, 2000);
+}
+
+// ── 직접 입력 ────────────────────────────────
+$("tabDirect").addEventListener("click", () => {
+  $("tabDirect").classList.add("active");
+  $("tabCsv").classList.remove("active");
+  $("pane-direct").hidden = false;
+  $("pane-csv").hidden = true;
+});
+$("tabCsv").addEventListener("click", () => {
+  $("tabCsv").classList.add("active");
+  $("tabDirect").classList.remove("active");
+  $("pane-csv").hidden = false;
+  $("pane-direct").hidden = true;
+});
+
+$("btnManualStart").addEventListener("click", async () => {
+  const result = await postJson("/api/start");
+  if (!result.ok) { showMsg(result.error, true); return; }
+  $("btnManualAdd").disabled = false;
+  $("btnEvent2").disabled = false;
+  showMsg("측정을 시작했어요. 값을 하나씩 추가하세요.");
+});
+
+$("btnManualAdd").addEventListener("click", async () => {
+  const value = $("manualValue").value;
+  const result = await postJson("/api/manual-point", { value });
+  if (!result.ok) { showMsg(result.error, true); return; }
+  const countEl = $("point-count2");
+  countEl.textContent = Number(countEl.textContent) + 1;
+  $("manualValue").value = "";
+  showMsg("값을 추가했어요.");
+});
+
+$("btnEvent2").addEventListener("click", async () => {
+  const label = $("eventLabel2").value;
+  const result = await postJson("/api/event", { label });
+  if (!result.ok) { showMsg(result.error, true); return; }
+  showMsg(`"${label}" 기록했어요.`);
+  $("eventLabel2").value = "";
+});
+
+$("btnCsvUpload").addEventListener("click", async () => {
+  const file = $("csvFile").files[0];
+  if (!file) { showMsg("파일을 먼저 골라 주세요.", true); return; }
+  const formData = new FormData();
+  formData.append("file", file);
+  const res = await fetch("/api/csv-upload", { method: "POST", body: formData });
+  const result = await res.json();
+  if (!result.ok) { showMsg(result.error, true); return; }
+  showMsg(`CSV에서 ${result.count}개 값을 읽었어요.`);
+});
+
+// ── 업로드 ──────────────────────────────────
+$("btnUpload").addEventListener("click", async () => {
+  const result = await postJson("/api/upload");
+  if (!result.ok) { showMsg(result.error, true); return; }
+  showMsg(`서버로 보냈어요! (문서 아이디: ${result.datasetId})`);
+});
+</script>
+</body>
+</html>
