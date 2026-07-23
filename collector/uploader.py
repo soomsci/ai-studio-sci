@@ -29,11 +29,24 @@ from urllib.parse import quote
 # 가리켜서, 그 기준으로 찾으면 실행 파일 옆에 둔 firebase-config.json을 못 찾는다.
 # frozen 상태면 실행 파일(sys.executable) 위치를 기준으로 삼는다.
 if getattr(sys, "frozen", False):
-    _BASE_DIR = os.path.dirname(sys.executable)
+    _EXE_DIR = os.path.dirname(sys.executable)
 else:
-    _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+    _EXE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-CONFIG_PATH = os.path.join(_BASE_DIR, "firebase-config.json")
+# PyInstaller가 실행할 때마다 리소스(datas)를 풀어 두는 임시 폴더.
+# frozen 상태에서만 있고, 개발 환경(python main.py)에서는 없다.
+_BUNDLE_DIR = getattr(sys, "_MEIPASS", None)
+
+
+def _config_candidates() -> list[str]:
+    """firebase-config.json을 찾을 위치를 우선순위대로 준다.
+    ① 실행 파일 옆 — 다시 빌드하지 않고도 교사가 키를 바꿀 수 있게 남겨 둔다.
+    ② .exe 안에 묶인 것 — build.spec이 datas에 넣어 sys._MEIPASS에 풀린다.
+    개발 환경(frozen 아님)에서는 ①(=collector/ 폴더)만 본다."""
+    candidates = [os.path.join(_EXE_DIR, "firebase-config.json")]
+    if _BUNDLE_DIR:
+        candidates.append(os.path.join(_BUNDLE_DIR, "firebase-config.json"))
+    return candidates
 
 MAX_POINTS = 5000  # §5.2, §5.4 — 이 이상은 Firestore 보안 규칙이 쓰기를 거부한다
 WARN_POINTS = 270  # §5.2 — "정상 범위"의 대략적 상한(10초 간격 × 45분)
@@ -74,19 +87,21 @@ class Dataset:
 
 
 def load_config() -> dict:
-    """collector/firebase-config.json을 읽는다. 비밀값이 아니므로 서비스 계정 키와
-    달리 그냥 파일로 두고 읽는다."""
-    if not os.path.exists(CONFIG_PATH):
+    """firebase-config.json을 읽는다. 비밀값이 아니므로 서비스 계정 키와
+    달리 그냥 파일로 두고 읽는다. _config_candidates() 우선순위대로 찾는다."""
+    path = next((p for p in _config_candidates() if os.path.exists(p)), None)
+    if path is None:
+        tried = "\n".join(f"  - {p}" for p in _config_candidates())
         raise UploadError(
-            f"설정 파일이 없습니다: {CONFIG_PATH}\n"
+            f"설정 파일을 찾지 못했습니다. 다음 위치를 확인했어요:\n{tried}\n"
             "collector/firebase-config.example.json을 복사해 firebase-config.json으로 "
             "저장하고, apiKey·projectId를 채우세요."
         )
-    with open(CONFIG_PATH, encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         config = json.load(f)
     for key in ("apiKey", "projectId"):
         if not config.get(key):
-            raise UploadError(f"firebase-config.json에 {key} 값이 비어 있습니다")
+            raise UploadError(f"{path}에 {key} 값이 비어 있습니다")
     return config
 
 
