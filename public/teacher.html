@@ -129,6 +129,8 @@
       <div class="th-header-left">
         <span>👩‍🏫 선생님 대시보드</span>
         <select id="class-select"></select>
+        <button id="edit-class-btn" class="btn tiny ghost">수정</button>
+        <button id="delete-class-btn" class="btn tiny ghost">삭제</button>
         <button id="new-class-btn" class="btn tiny ghost">+ 새 학급 만들기</button>
       </div>
       <div class="th-header-right">
@@ -152,15 +154,18 @@
     </main>
   </div>
 
-  <!-- 학급 만들기 모달 (v2.1) -->
+  <!-- 학급 만들기·수정 모달 (v2.1, v2.3) -->
   <div id="new-class-modal" class="th-modal-backdrop" style="display:none;">
     <div class="th-modal">
-      <h2>새 학급 만들기</h2>
+      <h2 id="new-class-title">새 학급 만들기</h2>
       <p class="hint">반 이름과 학생이 입장할 때 쓸 코드를 정해 주세요.</p>
       <label for="new-class-name">반 이름</label>
       <input id="new-class-name" type="text" placeholder="예: 2학년 3반">
       <label for="new-class-code">입장 코드</label>
       <input id="new-class-code" type="text" placeholder="예: 3B-2026">
+      <p id="new-class-code-hint" class="hint" style="display:none; margin: 8px 0 0;">
+        입장 코드를 바꾸면 새로 입장하는 학생부터 새 코드를 써야 해요. 이미 입장한 학생은 그대로 들어와요.
+      </p>
       <div id="new-class-error" class="th-notice" style="display:none; margin-top:14px; margin-bottom:0;"></div>
       <div class="th-modal-actions">
         <button id="new-class-cancel" class="btn ghost">취소</button>

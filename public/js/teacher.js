@@ -1,17 +1,18 @@
 // js/teacher.js — 선생님 대시보드 앱 셸 (세션 E)
 //
 // 구성 (SPEC §11 세션 E):
-//   - Google 로그인, 학급 선택, 학급 만들기(v2.1), 탭 전환
+//   - Google 로그인, 학급 선택, 학급 관리(만들기·수정·삭제 — v2.1, v2.3), 탭 전환
 //   - 탭 4개(모둠별 진행 현황·학급 종합 그래프·데이터 관리·교실 화면)의 실제 내용은
 //     js/teacher-tabs.js가 그린다. 데이터 조회는 js/teacher-data.js. 두 파일 상단 주석 참고.
 
 import { isConfigured, getFirebase } from "./firebase-init.js";
-import { fetchMyClasses, createClass } from "./teacher-data.js";
+import { fetchMyClasses, createClass, updateClass, deleteClass, countClassContents } from "./teacher-data.js";
 import { renderProgressTab, renderChartTab, renderManageTab, renderTvTab } from "./teacher-tabs.js";
 
 let currentUser = null;
 let myClasses = [];
-let currentClass = null; // { id, name, activeExp, ... }
+let currentClass = null; // { id, name, joinCode, activeExp, ... }
+let editingClass = null; // 학급 만들기·수정 모달이 지금 어느 모드인지 (null이면 만들기)
 
 // ── 시작 ────────────────────────────────────────────────
 
@@ -65,18 +66,21 @@ async function enterDashboard() {
     btn.addEventListener("click", () => switchTab(btn.dataset.tab));
   });
 
-  setupNewClassModal();
+  setupClassModal();
+  document.getElementById("edit-class-btn").addEventListener("click", () => {
+    if (currentClass) openClassModal(currentClass);
+  });
+  document.getElementById("delete-class-btn").addEventListener("click", handleDeleteClass);
+
   await refreshClassList();
 }
 
-// 학급 목록을 다시 불러와 드롭다운을 채운다. selectId를 주면 그 학급을 골라 보여준다.
-async function refreshClassList(selectId) {
-  myClasses = await fetchMyClasses(currentUser.uid);
+// 드롭다운만 다시 채운다 (선택은 건드리지 않는다)
+function populateClassSelect() {
   const select = document.getElementById("class-select");
   select.innerHTML = "";
   if (myClasses.length === 0) {
     select.innerHTML = `<option>담당 학급이 없어요</option>`;
-    openNewClassModal(); // 만들 학급이 없으면 바로 만들기 화면을 띄운다
     return;
   }
   myClasses.forEach((c) => {
@@ -86,30 +90,46 @@ async function refreshClassList(selectId) {
     select.append(opt);
   });
   select.onchange = () => selectClass(select.value);
+}
 
+// 학급 목록을 다시 불러와 드롭다운을 채우고, selectId를 주면 그 학급을 골라 보여준다.
+async function refreshClassList(selectId) {
+  myClasses = await fetchMyClasses(currentUser.uid);
+  populateClassSelect();
+  if (myClasses.length === 0) {
+    currentClass = null;
+    openClassModal(); // 만들 학급이 없으면 바로 만들기 화면을 띄운다
+    return;
+  }
   await selectClass(selectId || myClasses[0].id);
 }
 
-// ── 학급 만들기 (v2.1) ───────────────────────────────────
+// ── 학급 관리 — 만들기·수정 모달 (v2.1, v2.3) ─────────────
 
-function setupNewClassModal() {
-  document.getElementById("new-class-btn").addEventListener("click", () => openNewClassModal());
-  document.getElementById("new-class-cancel").addEventListener("click", () => closeNewClassModal());
-  document.getElementById("new-class-submit").addEventListener("click", handleCreateClass);
+function setupClassModal() {
+  document.getElementById("new-class-btn").addEventListener("click", () => openClassModal());
+  document.getElementById("new-class-cancel").addEventListener("click", () => closeClassModal());
+  document.getElementById("new-class-submit").addEventListener("click", handleClassSubmit);
 }
 
-function openNewClassModal() {
+// cls를 주면 수정 모드(입력칸을 채우고 저장 시 updateClass), 안 주면 만들기 모드.
+function openClassModal(cls) {
+  editingClass = cls || null;
+  document.getElementById("new-class-title").textContent = cls ? "학급 정보 수정" : "새 학급 만들기";
+  document.getElementById("new-class-submit").textContent = cls ? "저장" : "만들기";
+  document.getElementById("new-class-code-hint").style.display = cls ? "block" : "none";
   document.getElementById("new-class-error").style.display = "none";
-  document.getElementById("new-class-name").value = "";
-  document.getElementById("new-class-code").value = "";
+  document.getElementById("new-class-name").value = cls?.name || "";
+  document.getElementById("new-class-code").value = cls?.joinCode || "";
   document.getElementById("new-class-modal").style.display = "flex";
 }
 
-function closeNewClassModal() {
+function closeClassModal() {
   document.getElementById("new-class-modal").style.display = "none";
+  editingClass = null;
 }
 
-async function handleCreateClass() {
+async function handleClassSubmit() {
   const errBox = document.getElementById("new-class-error");
   const submitBtn = document.getElementById("new-class-submit");
   const name = document.getElementById("new-class-name").value.trim();
@@ -123,18 +143,65 @@ async function handleCreateClass() {
   }
 
   submitBtn.disabled = true;
-  submitBtn.textContent = "만드는 중…";
   try {
-    const newClass = await createClass({ name, joinCode, teacherUid: currentUser.uid });
-    closeNewClassModal();
-    await refreshClassList(newClass.id);
+    if (editingClass) {
+      submitBtn.textContent = "저장하는 중…";
+      await updateClass(editingClass.id, { name, joinCode, oldJoinCode: editingClass.joinCode });
+      // editingClass는 myClasses(그리고 그게 지금 선택된 학급이면 currentClass)와 같은 객체 참조라
+      // 여기서 값을 바꾸면 화면 쪽에도 그대로 반영된다.
+      editingClass.name = name;
+      editingClass.joinCode = joinCode;
+      closeClassModal();
+      populateClassSelect();
+      document.getElementById("class-select").value = editingClass.id;
+    } else {
+      submitBtn.textContent = "만드는 중…";
+      const newClass = await createClass({ name, joinCode, teacherUid: currentUser.uid });
+      closeClassModal();
+      await refreshClassList(newClass.id);
+    }
   } catch (err) {
-    errBox.textContent = err.message || "학급을 만들지 못했어요. 다시 시도해 주세요.";
+    errBox.textContent = err.message || "저장하지 못했어요. 다시 시도해 주세요.";
     errBox.style.display = "block";
   } finally {
     submitBtn.disabled = false;
-    submitBtn.textContent = "만들기";
+    submitBtn.textContent = editingClass ? "저장" : "만들기";
   }
+}
+
+// ── 학급 삭제 (v2.3) — 되돌릴 수 없어서 안의 데이터 개수를 세어 경고한다 ──
+
+async function handleDeleteClass() {
+  if (!currentClass?.id) return;
+
+  const { datasets, analyses } = await countClassContents(currentClass.id);
+  const warn = (datasets || analyses)
+    ? `이 학급의 측정 ${datasets}건, 분석 ${analyses}건도 함께 지워집니다. 되돌릴 수 없어요. 정말 지울까요?`
+    : `"${currentClass.name || currentClass.id}" 학급을 지울까요? 되돌릴 수 없어요.`;
+  if (!confirm(warn)) return;
+
+  try {
+    await deleteClass(currentClass.id, { joinCode: currentClass.joinCode });
+  } catch (err) {
+    alert(err.message || "학급을 지우는 데 실패했어요. 다시 시도해 주세요.");
+    return;
+  }
+
+  // 지금 보던 학급이 사라졌으니 목록만 새로고침하고 선택은 비운다
+  myClasses = await fetchMyClasses(currentUser.uid);
+  currentClass = null;
+  populateClassSelect();
+  if (myClasses.length > 0) {
+    const placeholder = document.createElement("option");
+    placeholder.value = "";
+    placeholder.textContent = "학급을 선택하세요";
+    document.getElementById("class-select").prepend(placeholder);
+    document.getElementById("class-select").value = "";
+  }
+  ["tab-progress", "tab-chart", "tab-manage", "tab-tv"].forEach((id) => {
+    document.getElementById(id).innerHTML = `<p style="color:var(--dim)">학급을 선택해 주세요.</p>`;
+  });
+  if (myClasses.length === 0) openClassModal();
 }
 
 async function selectClass(classId) {

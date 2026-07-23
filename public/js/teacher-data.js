@@ -16,7 +16,9 @@ async function fsCtx() {
 }
 
 export async function fetchMyClasses(uid) {
-  if (MODE === "mock") return [{ id: "mock-class", name: "연습용 학급", activeExp: 1 }];
+  if (MODE === "mock") {
+    return [{ id: "mock-class", name: "연습용 학급", joinCode: "MOCK-1", activeExp: 1, visibleExps: DEFAULT_VISIBLE_EXPS }];
+  }
   const { db, f } = await fsCtx();
   const q = f.query(f.collection(db, "classes"), f.where("teacherUid", "==", uid));
   const snap = await f.getDocs(q);
@@ -100,4 +102,80 @@ export async function createClass({ name, joinCode, teacherUid }) {
   }
 
   return { id: classRef.id, name, joinCode, teacherUid, activeExp: 1, visibleExps: DEFAULT_VISIBLE_EXPS };
+}
+
+// 학급 정보 수정 (v2.3) — 반 이름은 바로 고치면 되지만, 입장 코드가 바뀌면 세 단계를 순서대로 밟는다:
+// ① 새 코드 중복 확인 → ② classes.joinCode 갱신 → ③ 새 joinCodes 생성 + 옛 joinCodes 삭제.
+// 셋 중 하나라도 실패하면 학생이 입장 못 하는 상태가 남을 수 있어 단계별로 다른 안내를 던진다.
+export async function updateClass(classId, { name, joinCode, oldJoinCode }) {
+  if (MODE === "mock") return;
+  const { db, f } = await fsCtx();
+  const codeChanged = joinCode && joinCode !== oldJoinCode;
+
+  if (codeChanged) {
+    const codeSnap = await f.getDoc(f.doc(db, "joinCodes", joinCode));
+    if (codeSnap.exists()) {
+      throw new Error("이미 쓰이고 있는 입장 코드예요. 다른 코드를 써 주세요.");
+    }
+  }
+
+  // ② classes 문서 갱신 (이름 + 코드가 바뀌었으면 코드도 함께)
+  await f.updateDoc(f.doc(db, "classes", classId), {
+    name, ...(codeChanged ? { joinCode } : {}),
+  });
+
+  if (!codeChanged) return;
+
+  // ③-1 새 joinCodes 문서를 만든다
+  try {
+    await f.setDoc(f.doc(db, "joinCodes", joinCode), { classId });
+  } catch (err) {
+    throw new Error(
+      `반 이름은 저장됐지만 새 입장 코드("${joinCode}") 등록에 실패했어요. ` +
+      `아직 새 코드로는 입장이 안 돼요. 옛 코드("${oldJoinCode}")는 그대로 쓸 수 있어요. 다시 시도해 주세요.`
+    );
+  }
+
+  // ③-2 옛 joinCodes 문서를 지운다
+  try {
+    await f.deleteDoc(f.doc(db, "joinCodes", oldJoinCode));
+  } catch (err) {
+    throw new Error(
+      `새 입장 코드("${joinCode}")는 등록됐지만 옛 코드("${oldJoinCode}")를 지우는 데는 실패했어요. ` +
+      `당분간 두 코드 모두 입장이 될 수 있어요. 다시 시도해서 옛 코드를 지워 주세요.`
+    );
+  }
+}
+
+// 학급 안의 측정·분석 개수를 센다 — 삭제 전 경고 문구에 쓴다 (v2.3)
+export async function countClassContents(classId) {
+  if (MODE === "mock") return { datasets: 0, analyses: 0 };
+  const { db, f } = await fsCtx();
+  const [dSnap, aSnap] = await Promise.all([
+    f.getDocs(f.collection(db, "classes", classId, "datasets")),
+    f.getDocs(f.collection(db, "classes", classId, "analyses")),
+  ]);
+  return { datasets: dSnap.size, analyses: aSnap.size };
+}
+
+// 학급 삭제 (v2.3) — 되돌릴 수 없다. Firestore는 하위 컬렉션을 자동으로 지우지 않으므로
+// datasets·analyses를 먼저 지우고(안 지우면 고아 문서로 남는다, §5.2), 그다음 joinCodes·classes를 지운다.
+// groups 하위 컬렉션은 지금 아무 코드도 안 써서 삭제 대상에서 뺀다(§5.2).
+export async function deleteClass(classId, { joinCode }) {
+  if (MODE === "mock") return;
+  const { db, f } = await fsCtx();
+
+  const [dSnap, aSnap] = await Promise.all([
+    f.getDocs(f.collection(db, "classes", classId, "datasets")),
+    f.getDocs(f.collection(db, "classes", classId, "analyses")),
+  ]);
+  await Promise.all([
+    ...dSnap.docs.map((d) => f.deleteDoc(d.ref)),
+    ...aSnap.docs.map((d) => f.deleteDoc(d.ref)),
+  ]);
+
+  if (joinCode) {
+    await f.deleteDoc(f.doc(db, "joinCodes", joinCode)).catch(() => {});
+  }
+  await f.deleteDoc(f.doc(db, "classes", classId));
 }
