@@ -204,12 +204,33 @@ async function handleDeleteClass() {
   if (myClasses.length === 0) openClassModal();
 }
 
+// 탭 이름 → 렌더 함수. 네 탭은 서로 다른 DOM 영역(#tab-*)만 건드리므로 동시에 그려도 안전하다.
+const TAB_RENDERERS = {
+  progress: renderProgressTab,
+  chart: renderChartTab,
+  manage: renderManageTab,
+  tv: renderTvTab,
+};
+
+// 탭 하나를 그린다. 실패해도 다른 탭에 번지지 않게 개별로 감싼다.
+function renderTab(name) {
+  return TAB_RENDERERS[name](currentClass).catch((err) => {
+    console.error(err);
+    const el = document.getElementById("tab-" + name);
+    if (el) el.innerHTML = `<p style="color:var(--dim)">이 화면을 불러오지 못했어요. 탭을 다시 눌러 보세요.</p>`;
+  });
+}
+
 async function selectClass(classId) {
   currentClass = myClasses.find((c) => c.id === classId) || { id: classId };
-  await renderProgressTab(currentClass);
-  await renderChartTab(currentClass);
-  await renderManageTab(currentClass);
-  await renderTvTab(currentClass);
+
+  // 네 탭이 순서대로(await 줄줄이) Firestore를 읽으면 느리다. 지금 열려 있는 탭만 먼저
+  // 그려서 빨리 보여주고, 나머지 세 탭은 뒤에서 병렬로 그려 둔다(탭 전환 시 바로 보이게).
+  const activeTab = document.querySelector(".th-tab.active")?.dataset.tab || "progress";
+  await renderTab(activeTab);
+  Object.keys(TAB_RENDERERS)
+    .filter((name) => name !== activeTab)
+    .forEach((name) => renderTab(name));
 }
 
 function switchTab(name) {
