@@ -30,6 +30,10 @@
   .scan-list li.selected { border-color: #2a78d6; background: #eef4ff; }
   .chart-wrap { margin-top: 14px; max-width: 100%; }
   .chart-wrap canvas { max-width: 100%; }
+  .spinner { display: inline-block; width: 14px; height: 14px; margin-left: 8px;
+    border: 2px solid #ccc; border-top-color: #2a78d6; border-radius: 50%;
+    vertical-align: middle; animation: sds-spin 0.8s linear infinite; }
+  @keyframes sds-spin { to { transform: rotate(360deg); } }
 </style>
 <!-- 웹앱(public/index.html)이 이미 쓰는 유일한 외부 라이브러리와 같은 버전.
      수업용 노트북이 인터넷에 못 붙어 이 스크립트가 안 불려도, 아래 코드는
@@ -100,6 +104,7 @@
   </select>
 
   <button id="btnScan" type="button">센서 검색</button>
+  <span id="scanSpinner" class="spinner" hidden></span>
   <p class="hint">센서 전원을 켜고 "센서 검색"을 누르세요. 우리 모둠 센서 몸통에
      적힌 번호와 같은 것을 고르면 돼요.</p>
   <div id="scan-msg" style="margin-top:8px;color:#b00;"></div>
@@ -116,6 +121,7 @@
   <label>이번 측정 기록 이름(자동으로 채워져요) <input id="channelTitle" placeholder="예: 물(117-880)"></label>
   <p class="hint">나중에 이 측정을 찾아볼 때 쓰는 이름이에요. 안 바꿔도 괜찮아요.</p>
   <button id="btnAddChannel">센서 연결하기</button>
+  <span id="connectSpinner" class="spinner" hidden></span>
   <div id="channel-msg" style="margin-top:8px;color:#b00;"></div>
 
   <ul class="channel-list" id="channelList"></ul>
@@ -248,12 +254,23 @@ function renderChannels(channels) {
 }
 
 $("btnAddChannel").addEventListener("click", async () => {
-  const result = await postJson("/api/channels", {
-    sensorType: $("channelSensorType").value,
-    deviceId: $("channelDeviceId").value,
-    label: $("channelLabel").value,
-    title: $("channelTitle").value,
-  });
+  const btn = $("btnAddChannel");
+  btn.disabled = true;
+  btn.textContent = "연결 중…";
+  $("connectSpinner").hidden = false;
+  let result;
+  try {
+    result = await postJson("/api/channels", {
+      sensorType: $("channelSensorType").value,
+      deviceId: $("channelDeviceId").value,
+      label: $("channelLabel").value,
+      title: $("channelTitle").value,
+    });
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "센서 연결하기";
+    $("connectSpinner").hidden = true;
+  }
   if (!result.ok) { $("channel-msg").textContent = result.error; return; }
   $("channel-msg").textContent = "";
   renderChannels(result.channels);

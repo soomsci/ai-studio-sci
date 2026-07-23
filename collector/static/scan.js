@@ -6,24 +6,35 @@
 // 센서에 붙어 남의 데이터를 기록하게 된다(세션 G가 실물 센서로 확인).
 
 document.getElementById("btnScan").addEventListener("click", async () => {
+  const btn = document.getElementById("btnScan");
+  const spinner = document.getElementById("scanSpinner");
   const msg = document.getElementById("scan-msg");
   const list = document.getElementById("scanList");
   msg.textContent = "";
   list.innerHTML = "<li>찾는 중이에요...</li>";
-  const sensorType = document.getElementById("channelSensorType").value;
-  const res = await fetch(`/api/scan?type=${encodeURIComponent(sensorType)}`);
-  const result = await res.json();
-  if (!result.ok) {
-    list.innerHTML = "";
-    msg.textContent = result.error;
-    return;
+  btn.disabled = true;
+  btn.textContent = "센서 찾는 중…";
+  spinner.hidden = false;
+  try {
+    const sensorType = document.getElementById("channelSensorType").value;
+    const res = await fetch(`/api/scan?type=${encodeURIComponent(sensorType)}`);
+    const result = await res.json();
+    if (!result.ok) {
+      list.innerHTML = "";
+      msg.textContent = result.error;
+      return;
+    }
+    if (result.devices.length === 0) {
+      list.innerHTML = "";
+      msg.textContent = "센서를 못 찾았어요. 전원이 켜져 있는지, 다른 노트북이 이미 연결하고 있진 않은지 확인해 보세요.";
+      return;
+    }
+    renderScanResults(result.devices);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "센서 검색";
+    spinner.hidden = true;
   }
-  if (result.devices.length === 0) {
-    list.innerHTML = "";
-    msg.textContent = "센서를 못 찾았어요. 전원이 켜져 있는지, 다른 노트북이 이미 연결하고 있진 않은지 확인해 보세요.";
-    return;
-  }
-  renderScanResults(result.devices);
 });
 
 function renderScanResults(devices) {

@@ -74,6 +74,14 @@ def _device_id_from_name(name: str | None) -> str | None:
     return device_id or None
 
 
+# 검색(scan)에서 잡은 BLEDevice 객체를 번호로 잠깐 기억해 둔다. connect_by_id()는
+# 내부에서 스캔을 한 번 더 도는데, 방금 검색에서 이미 찾은 기기라면 그 객체로
+# 바로 connect()해서 두 번째 스캔(5~10초)을 통째로 건너뛸 수 있다 — 세션 G가
+# 실물 센서로 확인한 지연의 원인. 캐시가 없거나 오래돼서 비어 있으면
+# connect_by_id()로 그대로 폴백한다.
+_scan_cache: dict[str, object] = {}
+
+
 def scan_sensors(sensor_name: str) -> list[dict]:
     """주변의 sensor_name 종류 센서를 모두 찾아 목록으로 돌려준다.
 
@@ -103,6 +111,7 @@ def scan_sensors(sensor_name: str) -> list[dict]:
     for ble_device in found:
         device_id = _device_id_from_name(getattr(ble_device, "name", None))
         if device_id:
+            _scan_cache[device_id] = ble_device
             results.append({
                 "deviceId": device_id,
                 "label": f"{sensor_name} {device_id}",
@@ -141,6 +150,11 @@ class PascoSensorSource:
         스캔 결과 중 첫 번째(found[0])를 그냥 연결하는 방식은 쓰지 않는다 — 같은 스캔을
         두 번 돌리면 순서가 뒤집힐 수 있어서, 여러 센서를 동시에 쓸 때(예: 물·식용유
         온도 비교) 엉뚱한 센서에 붙어 남의 데이터를 기록할 위험이 있다.
+
+        방금 scan_sensors()로 찾은 기기라면(_scan_cache에 있으면) 그 BLEDevice로
+        바로 connect()해서 connect_by_id() 내부의 재스캔(5~10초)을 건너뛴다.
+        캐시에 없으면(오래돼서 비었거나 검색 없이 번호를 직접 입력한 경우)
+        connect_by_id()로 그대로 폴백한다.
         """
         if not device_id:
             raise SensorConnectionError("센서 번호를 입력해야 합니다")
@@ -149,8 +163,12 @@ class PascoSensorSource:
         from pasco.pasco_ble_device import PASCOBLEDevice
 
         self._device = PASCOBLEDevice()
+        cached_ble_device = _scan_cache.get(device_id)
         try:
-            self._device.connect_by_id(device_id)
+            if cached_ble_device is not None:
+                self._device.connect(cached_ble_device)
+            else:
+                self._device.connect_by_id(device_id)
         except (self._device.BLEConnectionError, self._device.BLEScanFailed, self._device.SensorNotFound) as exc:
             raise SensorConnectionError(f"{self.sensor_name} 센서({device_id}) 연결 실패: {exc}") from exc
 
