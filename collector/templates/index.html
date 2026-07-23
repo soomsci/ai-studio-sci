@@ -35,8 +35,8 @@
 <body>
 
 <h1>센서 측정 도구</h1>
-<p>모둠이 측정을 시작하기 전에 아래 정보를 채워 주세요. 학급 코드는 웹앱에
-   입장할 때 쓴 것과 같아요.</p>
+<p>측정을 시작하기 전에 아래 내용을 먼저 채워 주세요. 학급 코드는 웹앱에
+   들어갈 때 썼던 것과 같아요.</p>
 
 <section id="setup">
   <h2>1. 측정 정보 입력</h2>
@@ -56,13 +56,16 @@
       <option value="4">실험 4 — 비열(물·식용유)</option>
     </select>
   </label>
-  <label>조건 라벨 <input id="condition" placeholder="예: 가열"></label>
-  <label>측정 간격(초) <input id="intervalSec" type="number" value="10" min="1"></label>
+  <label>이번에 무엇을 다르게 했나요? <input id="condition" placeholder="예: 창문 닫음, 밝은 곳, 물"></label>
+  <p class="hint">비교하는 조건을 짧게 써 주세요.</p>
+
+  <label>몇 초마다 한 번씩 잴까요? <input id="intervalSec" type="number" value="10" min="1"></label>
+  <p class="hint">보통 그대로 둬도 돼요(10초).</p>
 
   <label>측정 방법</label>
   <div class="mode-choice">
-    <label><input type="radio" name="mode" value="realtime" checked style="width:auto"> 센서로 실시간 측정</label>
-    <label><input type="radio" name="mode" value="manual" style="width:auto"> 손으로 값 입력 (심박수·폐활량)</label>
+    <label><input type="radio" name="mode" value="realtime" checked style="width:auto"> 센서를 연결해서 잴게요</label>
+    <label><input type="radio" name="mode" value="manual" style="width:auto"> 센서 없이 숫자를 직접 넣을게요 (심박수·폐활량)</label>
   </div>
 
   <div id="manual-setup" hidden>
@@ -73,7 +76,8 @@
         {% endfor %}
       </select>
     </label>
-    <label>측정 제목 <input id="manualTitle" placeholder="예: 4모둠 심박수"></label>
+    <label>이번 측정 기록 이름 <input id="manualTitle" placeholder="예: 4모둠 심박수"></label>
+    <p class="hint">나중에 이 측정을 찾아볼 때 쓰는 이름이에요.</p>
   </div>
 
   <button id="btnSetup">다음</button>
@@ -82,17 +86,20 @@
 </section>
 
 <section id="channels" hidden>
-  <h2>2. 센서 연결하기</h2>
-  <p class="hint">센서 몸통에 적힌 번호를 그대로 입력하세요(예: 117-880). 여러 대를
-     동시에 재려면(예: 물·식용유 온도 비교) 이 칸에서 한 대씩 추가하면 돼요.</p>
+  <h2>2. 센서 연결하기 (센서로 잴 때)</h2>
+  <p class="hint">센서를 여러 대 동시에 쓰려면(예: 물·식용유 온도 비교) 이 칸에서
+     한 대씩 추가하면 돼요.</p>
   <select id="channelSensorType">
     {% for s in sensors.realtime %}
     <option value="{{ s.name }}">{{ s.name }} ({{ s.unit }})</option>
     {% endfor %}
   </select>
   <label>센서 번호 <input id="channelDeviceId" placeholder="예: 117-880"></label>
-  <label>이름표 <input id="channelLabel" placeholder="예: 물"></label>
-  <label>제목(자동으로 채워져요, 고칠 수 있어요) <input id="channelTitle" placeholder="예: 물(117-880)"></label>
+  <p class="hint">센서 몸통에 붙어 있는 여섯 자리 숫자예요. 뒤집어 보면 있어요.</p>
+  <label>이 센서로 뭘 재나요? <input id="channelLabel" placeholder="예: 물"></label>
+  <p class="hint">짧게 써 주세요. 그래프에서 이 센서를 구별하는 이름이 돼요.</p>
+  <label>이번 측정 기록 이름(자동으로 채워져요) <input id="channelTitle" placeholder="예: 물(117-880)"></label>
+  <p class="hint">나중에 이 측정을 찾아볼 때 쓰는 이름이에요. 안 바꿔도 괜찮아요.</p>
   <button id="btnAddChannel">센서 연결하기</button>
   <div id="channel-msg" style="margin-top:8px;color:#b00;"></div>
 
@@ -111,7 +118,7 @@
 </section>
 
 <section id="manual" hidden>
-  <h2>2. 값 넣기</h2>
+  <h2>2. 값 넣기 (손으로 넣을 때)</h2>
   <div class="tabs">
     <button id="tabDirect" class="active">직접 입력</button>
     <button id="tabCsv">CSV 파일 올리기</button>
@@ -138,8 +145,8 @@
 
 <section id="upload" hidden>
   <h2>3. 서버로 보내기</h2>
-  <p>측정을 마쳤으면 아래 버튼으로 보내세요. 센서가 여러 대면 센서마다 따로
-     올라가요. 보내고 나면 되돌릴 수 없어요.</p>
+  <p>측정을 다 마쳤으면 아래 버튼을 눌러 보내세요. 센서를 여러 대 썼다면
+     센서마다 따로 저장돼요. 한 번 보내면 되돌릴 수 없어요.</p>
   <button id="btnUpload">서버로 보내기</button>
 </section>
 
