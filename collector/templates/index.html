@@ -22,8 +22,12 @@
   .mode-choice { display: flex; gap: 12px; margin-top: 8px; }
   .channel-list { list-style: none; padding: 0; margin-top: 12px; }
   .channel-list li { border: 1px solid #eee; border-radius: 6px; padding: 10px; margin-bottom: 8px; }
-  .channel-list .num { display: inline-block; font-weight: bold; font-family: monospace; background: #333; color: #fff; padding: 2px 6px; border-radius: 4px; margin-right: 6px; }
+  .channel-list .num, .scan-list .num { display: inline-block; font-weight: bold; font-family: monospace; font-size: 1.1rem; background: #333; color: #fff; padding: 2px 8px; border-radius: 4px; margin-right: 8px; }
   .channel-list .val { float: right; color: #080; font-weight: bold; }
+  .scan-list { list-style: none; padding: 0; margin-top: 8px; }
+  .scan-list li { border: 1px solid #ccc; border-radius: 6px; padding: 12px; margin-bottom: 8px; cursor: pointer; }
+  .scan-list li:hover { border-color: #2a78d6; }
+  .scan-list li.selected { border-color: #2a78d6; background: #eef4ff; }
   .chart-wrap { margin-top: 14px; max-width: 100%; }
   .chart-wrap canvas { max-width: 100%; }
 </style>
@@ -94,8 +98,19 @@
     <option value="{{ s.name }}">{{ s.name }} ({{ s.unit }})</option>
     {% endfor %}
   </select>
-  <label>센서 번호 <input id="channelDeviceId" placeholder="예: 117-880"></label>
-  <p class="hint">센서 몸통에 붙어 있는 여섯 자리 숫자예요. 뒤집어 보면 있어요.</p>
+
+  <button id="btnScan" type="button">센서 검색</button>
+  <p class="hint">센서 전원을 켜고 "센서 검색"을 누르세요. 우리 모둠 센서 몸통에
+     적힌 번호와 같은 것을 고르면 돼요.</p>
+  <div id="scan-msg" style="margin-top:8px;color:#b00;"></div>
+  <ul class="scan-list" id="scanList"></ul>
+
+  <details>
+    <summary>번호를 못 찾았다면 직접 입력하기</summary>
+    <label>센서 번호 <input id="channelDeviceId" placeholder="예: 117-880"></label>
+    <p class="hint">센서 몸통에 붙어 있는 여섯 자리 숫자예요. 뒤집어 보면 있어요.</p>
+  </details>
+
   <label>이 센서로 뭘 재나요? <input id="channelLabel" placeholder="예: 물"></label>
   <p class="hint">짧게 써 주세요. 그래프에서 이 센서를 구별하는 이름이 돼요.</p>
   <label>이번 측정 기록 이름(자동으로 채워져요) <input id="channelTitle" placeholder="예: 물(117-880)"></label>
@@ -153,6 +168,7 @@
 <div id="status-msg"></div>
 
 <script src="/static/chart.js"></script>
+<script src="/static/scan.js"></script>
 <script>
 const $ = (id) => document.getElementById(id);
 let mode = null; // "realtime" | "manual"

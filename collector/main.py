@@ -136,6 +136,22 @@ def api_setup():
     return jsonify(ok=True, mode=mode, className=class_info["className"])
 
 
+@app.route("/api/scan")
+def api_scan():
+    """주변에서 지정한 종류의 센서를 찾는다. 같은 교실에서 다른 모둠도 동시에
+    센서를 켜면 여러 대가 함께 잡힐 수 있으므로, 번호(deviceId)를 반드시
+    같이 돌려줘야 한다 — 학생이 자기 모둠 센서 번호와 맞춰 골라야
+    옆 모둠 것에 잘못 연결되지 않는다(세션 G가 실물 센서로 확인)."""
+    sensor_type = request.args.get("type", "")
+    if sensor_type not in sensor.PASCO_SENSORS:
+        return jsonify(ok=False, error=f"알 수 없는 센서 종류입니다: {sensor_type}"), 400
+    try:
+        devices = sensor.scan_sensors(sensor_type)
+    except sensor.SensorConnectionError as exc:
+        return jsonify(ok=False, error=str(exc)), 500
+    return jsonify(ok=True, devices=devices)
+
+
 @app.route("/api/channels", methods=["POST"])
 def api_add_channel():
     """실시간 센서 1대를 번호로 지정해 연결하고 채널로 추가한다."""

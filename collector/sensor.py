@@ -46,6 +46,71 @@ class SensorConnectionError(RuntimeError):
     pass
 
 
+def _ensure_event_loop() -> None:
+    """pasco.pasco_ble_device를 맨 처음 import할 때 클래스 안에서 nest_asyncio.apply()가
+    실행되는데, 이건 현재 스레드에 asyncio 이벤트 루프가 있어야 한다. main.py는 Flask
+    요청을 메인 스레드가 아닌 별도 스레드에서 처리하므로, 루프가 없으면 여기서 바로
+    "There is no current event loop in thread ..." 로 죽는다(실제 서버 실행으로 재현·확인함).
+    각 채널(PASCOBLEDevice 인스턴스)이 갖는 통신용 루프(asyncio.new_event_loop())와는
+    별개 문제 — 이건 import 시점 1회성 문제라서 매번 확인만 하면 된다."""
+    import asyncio
+
+    try:
+        asyncio.get_event_loop()
+    except RuntimeError:
+        asyncio.set_event_loop(asyncio.new_event_loop())
+
+
+def _device_id_from_name(name: str | None) -> str | None:
+    """pasco 기기 이름(예: "Temperature 117-880>18")에서 connect_by_id에 쓸
+    번호(예: "117-880")만 뽑는다. 마지막으로 스캔된 이름 그대로 쓰면 뒤에 붙는
+    ">18"(인터페이스 번호) 때문에 조용히 실패한다 — 세션 G가 실물 센서로 확인."""
+    if not name:
+        return None
+    parts = name.split()
+    if not parts:
+        return None
+    device_id = parts[-1].split(">")[0]
+    return device_id or None
+
+
+def scan_sensors(sensor_name: str) -> list[dict]:
+    """주변의 sensor_name 종류 센서를 모두 찾아 목록으로 돌려준다.
+
+    같은 교실에서 여러 모둠이 동시에 센서를 켜면 이 목록에 여러 대가 함께
+    잡힌다. 그래서 목록 첫 번째를 그냥 연결하면(found[0]) 다른 모둠 센서에
+    붙어 남의 데이터를 기록하게 된다 — 세션 G가 실물 센서 2대로 확인한 위험.
+    반드시 번호(deviceId)를 함께 돌려주고, 학생이 자기 센서 몸통의 번호와
+    맞춰 골라야 한다.
+
+    ⚠ 센서 입수 후 실제 검색 테스트 필요 — 아래 scan() 호출부는 PASCO 공개
+    API·설치된 pasco 0.3.65 소스로 확인했지만, 실물 블루투스 스캔 자체는
+    하드웨어 없이는 검증할 수 없다.
+    """
+    if sensor_name not in PASCO_SENSORS:
+        raise ValueError(f"pasco로 검색할 수 없는 센서입니다: {sensor_name}")
+
+    _ensure_event_loop()
+    from pasco.pasco_ble_device import PASCOBLEDevice
+
+    device = PASCOBLEDevice()
+    try:
+        found = device.scan(sensor_name)
+    except device.BLEScanFailed as exc:
+        raise SensorConnectionError(f"{sensor_name} 센서 검색 실패: {exc}") from exc
+
+    results = []
+    for ble_device in found:
+        device_id = _device_id_from_name(getattr(ble_device, "name", None))
+        if device_id:
+            results.append({
+                "deviceId": device_id,
+                "label": f"{sensor_name} {device_id}",
+                "sensorType": sensor_name,
+            })
+    return results
+
+
 class PascoSensorSource:
     """pasco 라이브러리로 실시간 연결되는 센서.
 
@@ -80,19 +145,7 @@ class PascoSensorSource:
         if not device_id:
             raise SensorConnectionError("센서 번호를 입력해야 합니다")
 
-        # pasco.pasco_ble_device를 맨 처음 import할 때 클래스 안에서 nest_asyncio.apply()가
-        # 실행되는데, 이건 현재 스레드에 asyncio 이벤트 루프가 있어야 한다. main.py는 Flask
-        # 요청을 메인 스레드가 아닌 별도 스레드에서 처리하므로, 루프가 없으면 여기서 바로
-        # "There is no current event loop in thread ..." 로 죽는다(실제 서버 실행으로 재현·확인함).
-        # 각 채널(PASCOBLEDevice 인스턴스)이 갖는 통신용 루프(asyncio.new_event_loop())와는
-        # 별개 문제 — 이건 import 시점 1회성 문제라서 매번 확인만 하면 된다.
-        import asyncio
-
-        try:
-            asyncio.get_event_loop()
-        except RuntimeError:
-            asyncio.set_event_loop(asyncio.new_event_loop())
-
+        _ensure_event_loop()
         from pasco.pasco_ble_device import PASCOBLEDevice
 
         self._device = PASCOBLEDevice()
