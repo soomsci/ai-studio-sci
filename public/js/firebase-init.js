@@ -37,7 +37,11 @@ export async function getFirebase() {
   cached = {
     app,
     auth: authMod.getAuth(app),
-    db: fsMod.getFirestore(app),
+    // 학교망처럼 WebChannel 스트리밍이 막힌 환경에서 저장·조회가 수십 초씩
+    // 걸리는 문제 때문에, 롱폴링 자동 감지를 켠다. 정상 네트워크에서는
+    // 기존처럼 빠른 스트리밍을 쓰고, 막힌 환경에서만 롱폴링으로 붙는다.
+    // (항상 강제하는 experimentalForceLongPolling이 아니라 자동 감지를 쓴다)
+    db: fsMod.initializeFirestore(app, { experimentalAutoDetectLongPolling: true }),
     authMod, // 인증 함수 모음 (signInAnonymously 등)
     fsMod,   // Firestore 함수 모음 (collection, query 등)
   };
