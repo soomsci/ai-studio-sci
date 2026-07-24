@@ -2,8 +2,10 @@
 //
 // 실험 탭(세션 B·C·D)은 renderSteps()만 호출한다. 단계 UI를 직접 만들지 않는다. (SPEC §7·§8)
 //
-// renderSteps(containerEl, stepConfig, analysis, onSave)
-//   stepConfig: 각 실험 config의 steps 배열. 항목 형태 —
+// renderSteps(containerEl, stepConfig, analysis, onSave, onCompleteChange?)
+//   stepConfig: 각 실험 config의 steps 배열. 두 종류의 단계가 있다.
+//
+//   (가) 자유 글쓰기 단계 (기본)
 //     {
 //       id: "s1",                 // answers 객체의 키
 //       title: "데이터 살펴보기",
@@ -13,25 +15,59 @@
 //       placeholder: "...",       // (선택) 답변 칸 안내 문구
 //       field: "conclusion",      // (선택) 답을 answers 대신 analysis.conclusion에 저장 (4단계용)
 //       render: (slotEl, ctx) => {} // (선택) 그래프·자동 계산 등 실험별 내용을 끼울 자리
-//                                   //  ctx = { analysis, stepIndex }
 //     }
+//
+//   (나) 선택 관문 단계 — 정답을 골라야 넘어간다 (축 고르기 퀴즈 등)
+//     {
+//       id: "g1", type: "choice", title: "...", intro: "...",
+//       // 질문 하나:
+//       prompt: "가로축에는 무엇이 들어갈까요?",
+//       options: ["시간","CO2 농도","온도"], answer: "시간",
+//       hint: "측정하는 동안 계속 흘러간 것을 떠올려 보세요.",
+//       // 또는 한 단계에 여러 질문(가로축·세로축 등):
+//       choices: [ { id:"x", prompt, options, answer, hint },
+//                  { id:"y", prompt, options, answer, hint } ],
+//     }
+//     · 정답 문구는 config가 주는 것을 그대로 쓴다(실험마다 다르므로 하드코딩 금지).
+//     · 골라 넘긴 답은 자유 글쓰기와 같은 방식으로 analysis.answers에 저장된다.
+//       (질문이 하나면 키는 step.id, 여러 개면 choice.id)
+//     · 관문 진행 상태(맞힘/시도횟수/통과)는 analysis.gates에 따로 둔다.
+//
 //   analysis: getAnalysis()로 받은 객체. 이 함수가 직접 고쳐 나간다.
 //   onSave(analysis): 저장 함수. 입력 1초 후 자동 호출된다(디바운스).
+//   onCompleteChange(complete): (선택) 모든 단계 완료 여부가 바뀔 때 호출.
+//       설계 단계를 렌더한 실험 코드가 이 신호로 측정 영역을 열고 닫는다.
+//
+// isStepsComplete(stepConfig, analysis) → boolean 도 함께 export 한다(아래).
 
-export function renderSteps(containerEl, stepConfig, analysis, onSave) {
+export function renderSteps(containerEl, stepConfig, analysis, onSave, onCompleteChange) {
   analysis.answers = analysis.answers || {};
   analysis.aiLog = analysis.aiLog || [];
+  analysis.gates = analysis.gates || {}; // 선택 관문 진행 상태
   let current = 0;
   let saveTimer = null;
+  let lastComplete = isStepsComplete(stepConfig, analysis);
 
   // 입력이 멈추고 1초 뒤 자동 저장 (SPEC §8.4 — "저장" 버튼을 두지 않는다)
   function queueSave() {
     clearTimeout(saveTimer);
     saveTimer = setTimeout(() => onSave(analysis), 1000);
+    maybeNotifyComplete();
   }
   function saveNow() {
     clearTimeout(saveTimer);
     onSave(analysis);
+    maybeNotifyComplete();
+  }
+
+  // 완료 여부가 직전과 달라졌을 때만 콜백을 부른다
+  function maybeNotifyComplete() {
+    if (typeof onCompleteChange !== "function") return;
+    const now = isStepsComplete(stepConfig, analysis);
+    if (now !== lastComplete) {
+      lastComplete = now;
+      onCompleteChange(now);
+    }
   }
 
   function answerOf(step) {
@@ -52,7 +88,7 @@ export function renderSteps(containerEl, stepConfig, analysis, onSave) {
   function renderNav() {
     const nav = el("div", "steps-nav");
     stepConfig.forEach((step, i) => {
-      const done = answerOf(step).trim() !== "";
+      const done = stepComplete(step, analysis); // 글쓰기·선택 관문 모두 판정
       const btn = el("button", "step-chip" + (i === current ? " active" : "") + (done ? " done" : ""),
         `${i + 1} ${step.title}` + (done ? " ✓" : ""));
       btn.type = "button";
@@ -96,19 +132,82 @@ export function renderSteps(containerEl, stepConfig, analysis, onSave) {
       body.append(det);
     }
 
-    // 답변 칸 — 자동 저장
-    const ta = el("textarea", "step-answer");
-    ta.placeholder = step.placeholder || "우리 모둠이 발견한 것을 써 보세요";
-    ta.value = answerOf(step);
-    ta.addEventListener("input", () => {
-      setAnswer(step, ta.value);
-      queueSave();
-    });
-    body.append(ta);
+    if (step.type === "choice") {
+      // 선택 관문: 정답을 골라야 넘어간다
+      body.append(renderChoices(step));
+    } else {
+      // 자유 글쓰기 답변 칸 — 자동 저장
+      const ta = el("textarea", "step-answer");
+      ta.placeholder = step.placeholder || "우리 모둠이 발견한 것을 써 보세요";
+      ta.value = answerOf(step);
+      ta.addEventListener("input", () => {
+        setAnswer(step, ta.value);
+        queueSave();
+      });
+      body.append(ta);
+    }
 
     body.append(renderAiBox(step));
     body.append(renderFooter());
     return body;
+  }
+
+  // 선택 관문 렌더링. 한 단계에 질문이 하나 또는 여러 개 있을 수 있다.
+  function renderChoices(step) {
+    const wrap = el("div", "choices");
+    choicesOf(step).forEach((c) => wrap.append(renderChoice(c)));
+    return wrap;
+  }
+
+  // 질문 하나: 물음 + 보기 버튼들 + 채점 안내.
+  // 완전 차단하지 않는다(SPEC 결정): 틀리면 다시, 여러 번 틀리면 힌트,
+  // 그래도 안 되면 통과시키되 "스스로 못 맞힘"을 남긴다 — 학생이 갇히지 않게.
+  function renderChoice(c) {
+    const box = el("div", "choice");
+    const g = gateOf(analysis, c.key);
+    if (c.prompt) box.append(el("p", "choice-prompt", c.prompt));
+
+    const opts = el("div", "choice-opts");
+    (c.options || []).forEach((opt) => {
+      const b = el("button", "choice-opt", opt);
+      b.type = "button";
+      // 이미 맞힌 질문은 정답만 표시하고 잠근다
+      if (g.correct) {
+        if (opt === c.answer) b.classList.add("correct");
+        b.disabled = true;
+      } else if (g.picked === opt) {
+        b.classList.add("picked");
+      }
+      b.addEventListener("click", () => pickChoice(c, opt));
+      opts.append(b);
+    });
+    box.append(opts);
+
+    box.append(el("p", "choice-msg " + (g.correct ? "ok" : g.passed ? "passed" : "no"),
+      choiceMessage(c, g)));
+
+    // 힌트는 여러 번 틀렸을 때만 보여준다 (처음부터 보이면 스스로 생각하지 않는다)
+    if (c.hint && (g.attempts >= HINT_AFTER || g.passed) && !g.correct) {
+      box.append(el("p", "choice-hint", "🔍 " + c.hint));
+    }
+    return box;
+  }
+
+  function pickChoice(c, opt) {
+    const g = gateOf(analysis, c.key);
+    if (g.correct) return; // 이미 맞힘 — 잠금
+    g.picked = opt;
+    analysis.answers[c.key] = opt; // 고른 답도 다른 단계처럼 저장
+
+    if (opt === c.answer) {
+      g.correct = true;
+    } else {
+      g.attempts += 1;
+      // 여러 번 틀리면 통과시키되 스스로 못 맞힘을 남긴다
+      if (g.attempts >= PASS_AFTER) g.passed = true;
+    }
+    saveNow();  // 완료 여부 재판정 포함
+    render();
   }
 
   // AI 활용 기록 (SPEC §8.5) — AI 답을 그대로 옮기지 말고 "기록"만 남긴다
@@ -198,6 +297,65 @@ export function renderSteps(containerEl, stepConfig, analysis, onSave) {
   }
 
   render();
+}
+
+// 선택 관문 규칙 (SPEC 확정): 3번째 틀림부터 힌트, 4번째부터 통과 처리
+const HINT_AFTER = 3;
+const PASS_AFTER = 4;
+
+// 한 선택 관문 단계의 질문 목록을 표준 형태로 편다.
+// 질문이 여러 개면 step.choices, 하나면 step 자체에 적힌 필드를 쓴다.
+// key = answers 저장 키(하나면 step.id, 여러 개면 choice.id).
+function choicesOf(step) {
+  if (Array.isArray(step.choices) && step.choices.length) {
+    return step.choices.map((c) => ({ ...c, key: c.id || step.id }));
+  }
+  return [{ prompt: step.prompt, options: step.options, answer: step.answer, hint: step.hint, key: step.id }];
+}
+
+// 관문 진행 상태를 꺼낸다(없으면 만든다). analysis.gates에 질문별로 쌓인다.
+function gateOf(analysis, key) {
+  analysis.gates = analysis.gates || {};
+  return (analysis.gates[key] = analysis.gates[key] || { picked: "", correct: false, attempts: 0, passed: false });
+}
+
+// 채점 안내 문구 — 정답을 알려주지 않는다
+function choiceMessage(c, g) {
+  if (g.correct) return "정답이에요! 👍";
+  if (g.passed) return "스스로 못 맞혔지만 넘어갈 수 있어요. 힌트를 보고 다시 생각해 봐요.";
+  if (g.attempts >= HINT_AFTER) return "힌트를 보고 다시 골라 보세요.";
+  if (g.attempts > 0) return "다시 골라 보세요.";
+  return "정답을 골라 보세요.";
+}
+
+// ── 완료 판정 (실험 코드가 측정 영역을 열고 닫는 신호로 쓴다) ──
+
+function isChoiceStep(step) { return step.type === "choice"; }
+
+// 선택 관문 완료: 모든 질문을 맞혔거나 통과 처리됐으면 완료
+function choiceComplete(step, analysis) {
+  return choicesOf(step).every((c) => {
+    const g = analysis.gates && analysis.gates[c.key];
+    return !!g && (g.correct || g.passed);
+  });
+}
+
+// 글쓰기 완료: 답이 비어 있지 않으면 완료
+function writingComplete(step, analysis) {
+  const text = step.field === "conclusion"
+    ? (analysis.conclusion || "")
+    : (analysis.answers && analysis.answers[step.id]) || "";
+  return text.trim() !== "";
+}
+
+// 단계 하나가 완료됐는가
+export function stepComplete(step, analysis) {
+  return isChoiceStep(step) ? choiceComplete(step, analysis) : writingComplete(step, analysis);
+}
+
+// 이 steps 묶음이 전부 완료됐는가 (설계 단계 → 측정 열기 판정 등)
+export function isStepsComplete(stepConfig, analysis) {
+  return (stepConfig || []).every((step) => stepComplete(step, analysis));
 }
 
 // 작은 DOM 도우미
