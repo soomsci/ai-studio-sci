@@ -109,15 +109,7 @@ function buildConfig(spec) {
           }
         : undefined,
       scales: {
-        x: {
-          type: type === "bar" ? "category" : "linear",
-          title: { display: !!xLabel, text: xLabel || "" },
-          // 선형 x축 눈금을 소수 "0.8분"이 아니라 "3분 20초"로 보여준다.
-          // 축 값은 분 단위라 초로 되돌려 formatTime을 재사용한다. (막대축은 건드리지 않음)
-          ticks: type === "bar" ? undefined : {
-            callback: (value) => formatTime(value * 60, spec.tooltip?.timeFormat),
-          },
-        },
+        x: buildXScale(type, xLabel, spec.tooltip?.timeFormat),
         y: {
           title: { display: !!yLabel, text: yLabel || "" },
         },
@@ -131,6 +123,20 @@ function buildConfig(spec) {
     },
     plugins: [markerPlugin],
   };
+}
+
+// x축 설정. 막대(category)는 Chart.js 기본 눈금을 그대로 쓴다 —
+// ticks 키를 넣으면(값이 undefined여도) 라벨 대신 인덱스가 나오므로 아예 넣지 않는다.
+// 시계열(linear)만 눈금을 소수 "0.8분" 대신 "3분 20초"로 바꾼다(formatTime 재사용).
+function buildXScale(type, xLabel, timeFormat) {
+  const scale = {
+    type: type === "bar" ? "category" : "linear",
+    title: { display: !!xLabel, text: xLabel || "" },
+  };
+  if (type !== "bar") {
+    scale.ticks = { callback: (value) => formatTime(value * 60, timeFormat) };
+  }
+  return scale;
 }
 
 // {t,v}(t=초) → {x(분), y}, 이미 {x,y}면 그대로
