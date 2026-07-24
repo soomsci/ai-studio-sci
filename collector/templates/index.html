@@ -33,6 +33,7 @@
   .spinner { display: inline-block; width: 14px; height: 14px; margin-left: 8px;
     border: 2px solid #ccc; border-top-color: #2a78d6; border-radius: 50%;
     vertical-align: middle; animation: sds-spin 0.8s linear infinite; }
+  .spinner[hidden] { display: none; }
   @keyframes sds-spin { to { transform: rotate(360deg); } }
 </style>
 <!-- 웹앱(public/index.html)이 이미 쓰는 유일한 외부 라이브러리와 같은 버전.
@@ -169,6 +170,7 @@
   <p>측정을 다 마쳤으면 아래 버튼을 눌러 보내세요. 센서를 여러 대 썼다면
      센서마다 따로 저장돼요. 한 번 보내면 되돌릴 수 없어요.</p>
   <button id="btnUpload">서버로 보내기</button>
+  <span id="uploadSpinner" class="spinner" hidden></span>
 </section>
 
 <div id="status-msg"></div>
@@ -187,6 +189,22 @@ async function postJson(url, body) {
     body: JSON.stringify(body || {}),
   });
   return res.json();
+}
+
+// 버튼을 누르는 즉시 "…중" 표시로 바꾸고 비활성화했다가, 끝나면(성공/실패
+// 모두) 되돌린다. try/finally라 실패해도 버튼이 갇히지 않는다.
+async function withBusy(btn, busyText, fn, spinner) {
+  const original = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = busyText;
+  if (spinner) spinner.hidden = false;
+  try {
+    return await fn();
+  } finally {
+    btn.disabled = false;
+    btn.textContent = original;
+    if (spinner) spinner.hidden = true;
+  }
 }
 
 function showMsg(text, isError) {
@@ -254,23 +272,12 @@ function renderChannels(channels) {
 }
 
 $("btnAddChannel").addEventListener("click", async () => {
-  const btn = $("btnAddChannel");
-  btn.disabled = true;
-  btn.textContent = "연결 중…";
-  $("connectSpinner").hidden = false;
-  let result;
-  try {
-    result = await postJson("/api/channels", {
-      sensorType: $("channelSensorType").value,
-      deviceId: $("channelDeviceId").value,
-      label: $("channelLabel").value,
-      title: $("channelTitle").value,
-    });
-  } finally {
-    btn.disabled = false;
-    btn.textContent = "센서 연결하기";
-    $("connectSpinner").hidden = true;
-  }
+  const result = await withBusy($("btnAddChannel"), "연결 중…", () => postJson("/api/channels", {
+    sensorType: $("channelSensorType").value,
+    deviceId: $("channelDeviceId").value,
+    label: $("channelLabel").value,
+    title: $("channelTitle").value,
+  }), $("connectSpinner"));
   if (!result.ok) { $("channel-msg").textContent = result.error; return; }
   $("channel-msg").textContent = "";
   renderChannels(result.channels);
@@ -283,7 +290,7 @@ $("btnAddChannel").addEventListener("click", async () => {
 
 // ── 실시간 센서: 측정 시작·종료·이벤트 (모든 채널 공통) ──
 $("btnStart").addEventListener("click", async () => {
-  const result = await postJson("/api/start");
+  const result = await withBusy($("btnStart"), "시작하는 중…", () => postJson("/api/start"));
   if (!result.ok) { showMsg(result.error, true); return; }
   $("btnStop").disabled = false;
   $("btnEvent").disabled = false;
@@ -292,7 +299,7 @@ $("btnStart").addEventListener("click", async () => {
 });
 
 $("btnStop").addEventListener("click", async () => {
-  const result = await postJson("/api/stop");
+  const result = await withBusy($("btnStop"), "정리하는 중…", () => postJson("/api/stop"));
   if (!result.ok) { showMsg(result.error, true); return; }
   showMsg("측정을 마쳤어요.");
 });
@@ -342,7 +349,7 @@ $("btnManualStart").addEventListener("click", async () => {
 
 $("btnManualAdd").addEventListener("click", async () => {
   const value = $("manualValue").value;
-  const result = await postJson("/api/manual-point", { value });
+  const result = await withBusy($("btnManualAdd"), "추가하는 중…", () => postJson("/api/manual-point", { value }));
   if (!result.ok) { showMsg(result.error, true); return; }
   const countEl = $("point-count2");
   countEl.textContent = Number(countEl.textContent) + 1;
@@ -373,7 +380,7 @@ $("btnCsvUpload").addEventListener("click", async () => {
 
 // ── 업로드 ──────────────────────────────────
 $("btnUpload").addEventListener("click", async () => {
-  const result = await postJson("/api/upload");
+  const result = await withBusy($("btnUpload"), "보내는 중…", () => postJson("/api/upload"), $("uploadSpinner"));
   if (!result.ok) { showMsg(result.error, true); return; }
   if (result.results) {
     const lines = result.results.map((r) => `${r.label}(${r.deviceId}) → ${r.datasetId}`);

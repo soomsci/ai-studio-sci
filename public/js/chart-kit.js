@@ -11,7 +11,9 @@
 //       bar          → [{ label, value, color? }]   (항목 하나 = 막대 하나)
 //     xLabel, yLabel: 축 이름 (한국어로),
 //     refLine: { value, label, color },             // 수평 기준선
-//     events: [{ t, label }],                       // 수직 사건 기록선 (t는 초)
+//     events: [{ t, label }],                       // 수직 사건 기록선, 회색 (수집기 원본, t는 초)
+//     annotations: [{ t, label }],                  // 학생 사건 메모선, 빨강 (SPEC §5.1 v2.4, t는 초)
+//     onAddAnnotation: (t) => {},                   // 시계열 그래프 클릭 시 그 시각(초)을 콜백. 저장은 호출한 쪽 담당
 //     tooltip: {                                    // 좌표 확인 말풍선 (SPEC §7.1)
 //       timeFormat: "mmss" | "sec" | "clock",       //   "2분 05초" | "125초" | "02:05"
 //       valueLabel: "CO2 농도",                      //   값 앞에 붙는 이름
@@ -54,7 +56,7 @@ export function exportChartImage(canvasEl) {
 // ── 내부 구현 ───────────────────────────────────────────
 
 function buildConfig(spec) {
-  const { type = "line", datasets = [], xLabel, yLabel, refLine, events } = spec;
+  const { type = "line", datasets = [], xLabel, yLabel, refLine, events, annotations, onAddAnnotation } = spec;
 
   let data;
   if (type === "bar") {
@@ -95,10 +97,26 @@ function buildConfig(spec) {
       // 점 위가 아니라 "근처"에만 가도 가장 가까운 점이 잡히게 한다.
       // Chart.js 기본 이벤트에 touchstart/touchmove가 포함돼 터치 탭으로도 뜬다. (§7.1)
       interaction: { mode: "nearest", intersect: false },
+      // 시계열 그래프를 클릭하면 그 지점의 시각(경과 초)을 콜백으로 알려준다.
+      // 저장·메모입력·다시그리기는 콜백을 받은 실험 코드가 한다 (막대그래프에는 없음).
+      onClick: type !== "bar" && typeof onAddAnnotation === "function"
+        ? (evt, _els, chart) => {
+            const xScale = chart.scales.x;
+            const xMin = Math.round(xScale.left), xMax = Math.round(xScale.right);
+            if (evt.x < xMin || evt.x > xMax) return; // 그래프 바깥은 무시
+            const minutes = xScale.getValueForPixel(evt.x);
+            onAddAnnotation(Math.max(0, Math.round(minutes * 60))); // 분 → 초
+          }
+        : undefined,
       scales: {
         x: {
           type: type === "bar" ? "category" : "linear",
           title: { display: !!xLabel, text: xLabel || "" },
+          // 선형 x축 눈금을 소수 "0.8분"이 아니라 "3분 20초"로 보여준다.
+          // 축 값은 분 단위라 초로 되돌려 formatTime을 재사용한다. (막대축은 건드리지 않음)
+          ticks: type === "bar" ? undefined : {
+            callback: (value) => formatTime(value * 60, spec.tooltip?.timeFormat),
+          },
         },
         y: {
           title: { display: !!yLabel, text: yLabel || "" },
@@ -107,7 +125,8 @@ function buildConfig(spec) {
       plugins: {
         legend: { display: type !== "bar" && datasets.length > 1 },
         tooltip: buildTooltip(spec),
-        sdsMarkers: { refLine, events }, // 아래 커스텀 플러그인으로 전달
+        // 회색 events(수집기 원본)와 빨강 annotations(학생 메모)를 함께 넘긴다
+        sdsMarkers: { refLine, events, annotations },
       },
     },
     plugins: [markerPlugin],
@@ -229,26 +248,38 @@ const markerPlugin = {
     }
 
     // 수직 사건 기록선 (예: "창문 열기") — t(초)를 분으로 바꿔 위치를 잡는다
-    (opts?.events || []).forEach((ev, i) => {
-      const x = scales.x.getPixelForValue(ev.t / 60);
-      if (x < area.left || x > area.right) return;
-      ctx.strokeStyle = "#6b7280";
-      ctx.setLineDash([4, 4]);
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.moveTo(x, area.top);
-      ctx.lineTo(x, area.bottom);
-      ctx.stroke();
-      if (ev.label) {
-        ctx.setLineDash([]);
-        ctx.fillStyle = "#374151";
-        ctx.font = "12px sans-serif";
-        ctx.textAlign = "left";
-        // 라벨이 겹치지 않게 번갈아 높이를 바꾼다
-        ctx.fillText(ev.label, x + 4, area.top + 14 + (i % 2) * 16);
-      }
+    // 수집기 원본(events)은 회색 점선, 학생 메모(annotations)는 빨강 실선으로 구분한다.
+    // 원본은 절대 수정하지 않고, 학생 메모는 별도 배열로 얹기만 한다. (절대 규칙 6)
+    drawVerticalMarks(ctx, scales, area, opts?.events, {
+      color: "#6b7280", labelColor: "#374151", dash: [4, 4], width: 1,
+    });
+    drawVerticalMarks(ctx, scales, area, opts?.annotations, {
+      color: "#dc2626", labelColor: "#dc2626", dash: [], width: 1.5,
     });
 
     ctx.restore();
   },
 };
+
+// 시각(t=초) 목록을 수직선 + 라벨로 그린다. events·annotations가 공유한다.
+function drawVerticalMarks(ctx, scales, area, marks, style) {
+  (marks || []).forEach((m, i) => {
+    const x = scales.x.getPixelForValue(m.t / 60);
+    if (x < area.left || x > area.right) return;
+    ctx.strokeStyle = style.color;
+    ctx.setLineDash(style.dash);
+    ctx.lineWidth = style.width;
+    ctx.beginPath();
+    ctx.moveTo(x, area.top);
+    ctx.lineTo(x, area.bottom);
+    ctx.stroke();
+    if (m.label) {
+      ctx.setLineDash([]);
+      ctx.fillStyle = style.labelColor;
+      ctx.font = "12px sans-serif";
+      ctx.textAlign = "left";
+      // 라벨이 겹치지 않게 번갈아 높이를 바꾼다
+      ctx.fillText(m.label, x + 4, area.top + 14 + (i % 2) * 16);
+    }
+  });
+}
