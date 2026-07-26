@@ -1318,6 +1318,16 @@ CLAUDE.md의 "작업 방식 — 토큰·비용 절약"을 지켜라.
 1. exp1.js의 openAnnoForm() · renderAnnoList() · escapeText() 를 지우고
    annotations.js의 mountAnnotations()를 쓰도록 바꿔라.
 2. injectStyle()에서 .exp1-anno-* 규칙도 지워라. 모듈이 자기 스타일을 넣는다.
+
+★ 붙이는 위치를 주의해라 (여기서 틀리기 쉽다):
+- mountAnnotations()는 renderStep2Chart() 안에서 딱 한 번만 불러라.
+  draw() 안에서 부르면 안 된다 — 다시 그릴 때마다 학생이 쓰던 입력칸이
+  지워진다. 반환받은 객체를 draw()가 닫아서 쓰는 구조로 만들어라.
+- 그래프 클릭 연결은 onPickTime: anno.openAt 로 넘기면 된다.
+- 막대그래프로 바꿨을 때는 anno.close()를 불러라. 지금 코드가
+  #exp1-anno-form 을 innerHTML=""로 비우던 자리다.
+- 그래프를 다시 그린 뒤에는 anno.refresh()로 목록을 갱신해라.
+
 3. 동작은 지금과 똑같아야 한다:
    - 선그래프를 누르면 그 시각 입력칸이 열린다(막대그래프에서는 안 열린다)
    - 메모를 넣거나 지우면 그래프가 바로 다시 그려진다
