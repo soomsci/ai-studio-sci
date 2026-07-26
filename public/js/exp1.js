@@ -13,6 +13,7 @@ import { listDatasets, saveDataset, getAnalysis, saveAnalysis } from "./data.js"
 import { renderChart } from "./chart-kit.js";
 import { renderSteps, isStepsComplete } from "./steps.js";
 import { renderRawDataTable } from "./raw-data.js";
+import { mountAnnotations } from "./annotations.js";
 import { getSession } from "./auth.js";
 
 // 탭이 열려 있는 동안의 상태 (탭을 다시 열면 mount가 새로 채운다)
@@ -236,8 +237,17 @@ function renderStep2Chart(slotEl) {
     </div>
     <div class="exp1-chartbox"><canvas></canvas></div>
     <p class="exp1-dim" id="exp1-barnote"></p>
-    <div id="exp1-anno-form"></div>
-    <div id="exp1-anno-list"></div>`;
+    <div id="exp1-anno"></div>`;
+
+  // 사건 메모선 — 입력칸·목록·지우기는 공통 모듈이 맡는다.
+  // ★ 여기서 딱 한 번만 붙인다. draw() 안에서 붙이면 그래프를 다시 그릴 때마다
+  //   학생이 쓰던 메모 글이 지워진다.
+  const anno = mountAnnotations(slotEl.querySelector("#exp1-anno"), {
+    analysis,
+    onSave: saveAnalysis,
+    onChange: () => draw(), // 메모가 늘거나 줄면 그래프를 다시 그린다
+    placeholder: "예) 창문 열기",
+  });
 
   slotEl.querySelectorAll("input[name=exp1-type]").forEach((r) =>
     r.addEventListener("change", () => {
@@ -257,81 +267,12 @@ function renderStep2Chart(slotEl) {
   const draw = () => {
     const canvasEl = slotEl.querySelector("canvas");
     if (!canvasEl) return; // 고른 측정이 없으면 캔버스가 안내 문구로 바뀌어 있다
-    drawChart(canvasEl, { ...opts, onPickTime: openAnnoForm }, slotEl.querySelector("#exp1-barnote"));
-    if (opts.chartType !== "line") slotEl.querySelector("#exp1-anno-form").innerHTML = "";
-    renderAnnoList(slotEl, draw);
+    drawChart(canvasEl, { ...opts, onPickTime: anno.openAt }, slotEl.querySelector("#exp1-barnote"));
+    if (opts.chartType !== "line") anno.close(); // 막대그래프에서는 열려 있던 입력칸을 닫는다
+    anno.refresh();
   };
 
-  // 클릭한 시각(초)에 대한 라벨 입력칸을 그래프 아래에 연다.
-  // ★ prompt()·alert()를 쓰지 않는다 — 화면 안 입력칸으로 만든다.
-  function openAnnoForm(t) {
-    const formEl = slotEl.querySelector("#exp1-anno-form");
-    formEl.innerHTML = `
-      <div class="exp1-anno-form">
-        <label for="exp1-anno-text"><b>${fmtTime(t)}</b>에 무슨 일이 있었나요?</label>
-        <div class="exp1-anno-row">
-          <input type="text" id="exp1-anno-text" maxlength="20" placeholder="예) 창문 열기">
-          <button type="button" id="exp1-anno-add">메모선 남기기</button>
-          <button type="button" id="exp1-anno-cancel" class="exp1-ghost">그만두기</button>
-        </div>
-        <p class="exp1-dim" id="exp1-anno-msg"></p>
-      </div>`;
-    const input = formEl.querySelector("#exp1-anno-text");
-    input.focus();
-
-    const add = () => {
-      const label = input.value.trim();
-      if (!label) {
-        formEl.querySelector("#exp1-anno-msg").textContent = "무슨 일이 있었는지 한 줄만 적어 주세요.";
-        input.focus();
-        return;
-      }
-      analysis.annotations.push({ t: Math.round(t), label });
-      analysis.annotations.sort((a, b) => a.t - b.t);
-      saveAnalysis(analysis);
-      formEl.innerHTML = "";
-      draw();
-    };
-    formEl.querySelector("#exp1-anno-add").addEventListener("click", add);
-    formEl.querySelector("#exp1-anno-cancel").addEventListener("click", () => (formEl.innerHTML = ""));
-    input.addEventListener("keydown", (e) => {
-      if (e.key === "Enter") add();
-      if (e.key === "Escape") formEl.innerHTML = "";
-    });
-  }
-
   draw();
-}
-
-// 내가 단 메모선 목록 (+ 지우기). config s2 힌트가 "메모 목록에서 지울 수 있어요"라고
-// 안내하므로 이 목록이 없으면 화면 문구가 거짓말이 된다.
-function renderAnnoList(slotEl, draw) {
-  const listEl = slotEl.querySelector("#exp1-anno-list");
-  if (!listEl) return;
-  const notes = analysis.annotations;
-  if (!notes.length) {
-    listEl.innerHTML = `<p class="exp1-dim">그래프를 누르면 그 시각에 빨간 메모선을 남길 수 있어요.</p>`;
-    return;
-  }
-  listEl.innerHTML = `<p class="exp1-help">내가 단 메모선</p>
-    <ul class="exp1-anno-ul">${notes
-      .map(
-        (a, i) => `<li><b>${fmtTime(a.t)}</b> · ${escapeText(a.label)}
-          <button type="button" class="exp1-ghost" data-i="${i}">지우기</button></li>`
-      )
-      .join("")}</ul>`;
-  listEl.querySelectorAll("button[data-i]").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      analysis.annotations.splice(Number(btn.dataset.i), 1);
-      saveAnalysis(analysis);
-      draw();
-    });
-  });
-}
-
-// 학생이 쓴 글자를 표에 넣기 전에 태그로 읽히지 않게 한다
-function escapeText(s) {
-  return String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 }
 
 // 3단계: 그래프(좌표 확인용) + 자동 계산 표
@@ -482,14 +423,7 @@ function injectStyle() {
     /* 계획을 세우기 전 잠긴 영역 — 보이되 누를 수 없다 */
     .exp1-locked { opacity: 0.45; filter: grayscale(0.4); }
     .exp1-lockmsg { margin: 4px 2px; color: #b45309; font-size: 15px; }
-    /* 사건 메모선 입력칸·목록 */
-    .exp1-anno-form { border: 1px solid #fca5a5; background: #fef2f2; border-radius: 8px; padding: 8px 12px; margin: 6px 0; }
-    .exp1-anno-row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-top: 6px; }
-    .exp1-anno-row input { flex: 1 1 180px; padding: 4px 8px; }
-    .exp1-anno-ul { list-style: none; padding: 0; margin: 4px 0; }
-    .exp1-anno-ul li { padding: 3px 0; border-bottom: 1px dashed #eee; }
-    .exp1-anno-ul li b { color: #dc2626; }
-    .exp1-ghost { background: none; border: 1px solid #ccc; border-radius: 6px; color: #555; font-size: 13px; padding: 2px 8px; margin-left: 6px; cursor: pointer; }
+    /* 사건 메모선 입력칸·목록 스타일은 js/annotations.js가 직접 넣는다 */
   `;
   document.head.append(style);
 }
