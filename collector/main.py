@@ -187,7 +187,19 @@ def api_add_channel():
 
 @app.route("/api/start", methods=["POST"])
 def api_start():
+    """측정을 시작한다. 센서를 연결한 뒤에야 "이 실험은 빨리/천천히 재야겠다"를
+    판단할 수 있으므로, 측정 간격은 1단계(설정)가 아니라 이 시점에 화면에서
+    다시 보내는 값을 쓴다 — 안 보내면 1단계에서 정한 값을 그대로 쓴다."""
+    data = request.get_json(silent=True) or {}
     with LOCK:
+        if "intervalSec" in data:
+            try:
+                interval_sec = float(data["intervalSec"])
+            except (TypeError, ValueError):
+                return jsonify(ok=False, error="측정 간격이 올바르지 않습니다"), 400
+            if interval_sec < 1:
+                return jsonify(ok=False, error="측정 간격은 1초 이상으로 해 주세요(센서가 그보다 빨리는 못 읽어요)"), 400
+            SESSION.meta["interval_sec"] = interval_sec
         try:
             if SESSION.mode == "realtime":
                 if not SESSION.channels:
