@@ -2,15 +2,17 @@
 //
 // 화면 구성 (위 → 아래):
 //   ① 탐구 질문 헤더
-//   ② 우리 모둠 측정 목록 + 연습 데이터 만들기 + 분석에 쓸 측정 고르기
-//   ③ 분석 5단계 (steps.js의 renderSteps) — 그래프·자동 계산은 render 훅으로 끼움
+//   ② 실험 계획 세우기 (config의 designSteps) — 다 채워야 아래가 열린다
+//   ③ 우리 모둠 측정 목록 + 연습 데이터 만들기 + 분석에 쓸 측정 고르기
+//   ④ 분석 5단계 (steps.js의 renderSteps) — 그래프·자동 계산은 render 훅으로 끼움
 //
 // 문구·질문·그래프 설정은 전부 config/exp1.config.js에 있다.
 
 import { EXP1 } from "../config/exp1.config.js";
 import { listDatasets, saveDataset, getAnalysis, saveAnalysis } from "./data.js";
 import { renderChart } from "./chart-kit.js";
-import { renderSteps } from "./steps.js";
+import { renderSteps, isStepsComplete } from "./steps.js";
+import { renderRawDataTable } from "./raw-data.js";
 import { getSession } from "./auth.js";
 
 // 탭이 열려 있는 동안의 상태 (탭을 다시 열면 mount가 새로 채운다)
@@ -33,7 +35,15 @@ export async function mount(containerEl) {
       <p class="exp1-question">탐구 질문: <strong>${EXP1.question}</strong></p>
     </section>
 
-    <section class="exp1-box">
+    <section class="exp1-box" id="exp1-design">
+      <h3>실험 계획 세우기</h3>
+      <p class="exp1-help">재기 전에 어떻게 실험할지 먼저 정해요. 세 가지를 다 적으면 아래 측정 화면이 열려요.</p>
+      <div id="exp1-design-steps"></div>
+    </section>
+
+    <p class="exp1-lockmsg" id="exp1-lockmsg" hidden></p>
+
+    <section class="exp1-box" id="exp1-measure">
       <h3>우리 모둠의 측정</h3>
       <p class="exp1-help">분석에 쓸 측정을 골라 주세요. 여러 개를 고르면 그래프에 겹쳐 그려져요.</p>
       <div id="exp1-list"><p class="exp1-dim">측정 목록을 불러오는 중…</p></div>
@@ -63,8 +73,11 @@ async function reload() {
   ]);
   analysis.expNo = EXP1.expNo;
   analysis.groupId = session.groupId;
-  analysis.chartOptions = analysis.chartOptions || { chartType: "line", showRef: true };
+  // 빈 분석 문서는 chartOptions가 {}로 온다. || 로는 빈 객체가 그대로 남아
+  // chartType이 undefined가 되고, Firestore가 저장을 통째로 거부한다.
+  analysis.chartOptions = { chartType: "line", showRef: true, ...(analysis.chartOptions || {}) };
   analysis.chartType = analysis.chartOptions.chartType;
+  analysis.annotations = analysis.annotations || []; // 학생이 그래프에 남긴 사건 메모선
 
   // 지워진 측정은 선택에서 빼고, 아무것도 안 골랐으면 전부 고른 것으로 시작한다
   const ids = datasets.map((d) => d.id);
@@ -72,8 +85,36 @@ async function reload() {
   if (!picked.length) picked = [...ids];
   analysis.datasetIds = picked;
 
+  // 실험 계획 단계 — 다 채우면 (다섯 번째 인자로) 알려 준다
+  renderSteps(
+    rootEl.querySelector("#exp1-design-steps"),
+    EXP1.designSteps,
+    analysis,
+    saveAnalysis,
+    () => applyLock()
+  );
+
   renderDatasetList(rootEl.querySelector("#exp1-list"));
   renderSteps(rootEl.querySelector("#exp1-steps"), buildSteps(), analysis, saveAnalysis);
+  applyLock(); // 새로고침으로 다시 들어온 모둠도 지금 상태로 판단한다
+}
+
+// ── ② 계획을 세우기 전에는 측정·분석을 잠가 둔다 ──────────
+// 감추지는 않는다. 무엇이 기다리는지는 보이되 아직 누를 수 없는 상태로 둔다.
+// ★ 이미 잰 측정이 하나라도 있으면 잠그지 않는다. 수집기(별도 앱)로 먼저 잰
+//   모둠이 웹앱에서 막히면 수업이 그 자리에서 멈추기 때문이다.
+function applyLock() {
+  const locked = datasets.length === 0 && !isStepsComplete(EXP1.designSteps, analysis);
+  const msgEl = rootEl.querySelector("#exp1-lockmsg");
+  msgEl.hidden = !locked;
+  msgEl.textContent = locked
+    ? "🔒 먼저 실험 계획을 세워 보세요. 위 세 단계를 다 적으면 아래에서 측정을 시작할 수 있어요."
+    : "";
+  for (const sel of ["#exp1-measure", "#exp1-steps"]) {
+    const el = rootEl.querySelector(sel);
+    el.classList.toggle("exp1-locked", locked);
+    el.inert = locked; // 잠긴 동안은 누르기·글쓰기가 되지 않는다
+  }
 }
 
 // 지금 분석에 골라 둔 측정들
@@ -176,7 +217,12 @@ function renderStep1Info(slotEl) {
     .join("");
   slotEl.innerHTML = `<table class="exp1-table">
     <thead><tr><th>측정</th><th>조건</th><th>측정 시간</th><th>간격</th><th>값 범위</th><th>기록된 일</th></tr></thead>
-    <tbody>${rows}</tbody></table>`;
+    <tbody>${rows}</tbody></table>
+    <p class="exp1-help">아래는 센서가 기록한 값 그대로예요. 표를 넘겨 보거나 파일로 내려받아 확인해 보세요.</p>
+    <div id="exp1-raw"></div>`;
+
+  // 원본 측정값 표 + CSV 내려받기 (raw-data.js, 읽기 전용)
+  renderRawDataTable(slotEl.querySelector("#exp1-raw"), picked, "측정데이터_실험1");
 }
 
 // 2단계: 그래프 + 표현 방법 고르기 (선/막대, 기준선 켜고 끄기)
@@ -189,7 +235,9 @@ function renderStep2Chart(slotEl) {
       <label class="exp1-gap"><input type="checkbox" id="exp1-ref" ${opts.showRef ? "checked" : ""}> 기준선 1,000ppm 보이기</label>
     </div>
     <div class="exp1-chartbox"><canvas></canvas></div>
-    <p class="exp1-dim" id="exp1-barnote"></p>`;
+    <p class="exp1-dim" id="exp1-barnote"></p>
+    <div id="exp1-anno-form"></div>
+    <div id="exp1-anno-list"></div>`;
 
   slotEl.querySelectorAll("input[name=exp1-type]").forEach((r) =>
     r.addEventListener("change", () => {
@@ -205,8 +253,85 @@ function renderStep2Chart(slotEl) {
     draw();
   });
 
-  const draw = () => drawChart(slotEl.querySelector("canvas"), opts, slotEl.querySelector("#exp1-barnote"));
+  // 그래프를 누르면 그 시각에 메모선을 남길 수 있다 (선그래프에서만 — 막대에는 시간축이 없다)
+  const draw = () => {
+    const canvasEl = slotEl.querySelector("canvas");
+    if (!canvasEl) return; // 고른 측정이 없으면 캔버스가 안내 문구로 바뀌어 있다
+    drawChart(canvasEl, { ...opts, onPickTime: openAnnoForm }, slotEl.querySelector("#exp1-barnote"));
+    if (opts.chartType !== "line") slotEl.querySelector("#exp1-anno-form").innerHTML = "";
+    renderAnnoList(slotEl, draw);
+  };
+
+  // 클릭한 시각(초)에 대한 라벨 입력칸을 그래프 아래에 연다.
+  // ★ prompt()·alert()를 쓰지 않는다 — 화면 안 입력칸으로 만든다.
+  function openAnnoForm(t) {
+    const formEl = slotEl.querySelector("#exp1-anno-form");
+    formEl.innerHTML = `
+      <div class="exp1-anno-form">
+        <label for="exp1-anno-text"><b>${fmtTime(t)}</b>에 무슨 일이 있었나요?</label>
+        <div class="exp1-anno-row">
+          <input type="text" id="exp1-anno-text" maxlength="20" placeholder="예) 창문 열기">
+          <button type="button" id="exp1-anno-add">메모선 남기기</button>
+          <button type="button" id="exp1-anno-cancel" class="exp1-ghost">그만두기</button>
+        </div>
+        <p class="exp1-dim" id="exp1-anno-msg"></p>
+      </div>`;
+    const input = formEl.querySelector("#exp1-anno-text");
+    input.focus();
+
+    const add = () => {
+      const label = input.value.trim();
+      if (!label) {
+        formEl.querySelector("#exp1-anno-msg").textContent = "무슨 일이 있었는지 한 줄만 적어 주세요.";
+        input.focus();
+        return;
+      }
+      analysis.annotations.push({ t: Math.round(t), label });
+      analysis.annotations.sort((a, b) => a.t - b.t);
+      saveAnalysis(analysis);
+      formEl.innerHTML = "";
+      draw();
+    };
+    formEl.querySelector("#exp1-anno-add").addEventListener("click", add);
+    formEl.querySelector("#exp1-anno-cancel").addEventListener("click", () => (formEl.innerHTML = ""));
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") add();
+      if (e.key === "Escape") formEl.innerHTML = "";
+    });
+  }
+
   draw();
+}
+
+// 내가 단 메모선 목록 (+ 지우기). config s2 힌트가 "메모 목록에서 지울 수 있어요"라고
+// 안내하므로 이 목록이 없으면 화면 문구가 거짓말이 된다.
+function renderAnnoList(slotEl, draw) {
+  const listEl = slotEl.querySelector("#exp1-anno-list");
+  if (!listEl) return;
+  const notes = analysis.annotations;
+  if (!notes.length) {
+    listEl.innerHTML = `<p class="exp1-dim">그래프를 누르면 그 시각에 빨간 메모선을 남길 수 있어요.</p>`;
+    return;
+  }
+  listEl.innerHTML = `<p class="exp1-help">내가 단 메모선</p>
+    <ul class="exp1-anno-ul">${notes
+      .map(
+        (a, i) => `<li><b>${fmtTime(a.t)}</b> · ${escapeText(a.label)}
+          <button type="button" class="exp1-ghost" data-i="${i}">지우기</button></li>`
+      )
+      .join("")}</ul>`;
+  listEl.querySelectorAll("button[data-i]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      analysis.annotations.splice(Number(btn.dataset.i), 1);
+      saveAnalysis(analysis);
+      draw();
+    });
+  });
+}
+
+// 학생이 쓴 글자를 표에 넣기 전에 태그로 읽히지 않게 한다
+function escapeText(s) {
+  return String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 }
 
 // 3단계: 그래프(좌표 확인용) + 자동 계산 표
@@ -214,6 +339,7 @@ function renderStep3Chart(slotEl) {
   slotEl.innerHTML = `
     <div class="exp1-chartbox"><canvas></canvas></div>
     <div id="exp1-stats"></div>`;
+  // 2단계에서 단 메모선도 함께 보인다 (여기서는 새로 찍지 않고 패턴과 견주어 보기만 한다)
   drawChart(slotEl.querySelector("canvas"), { chartType: "line", showRef: true });
 
   const picked = pickedDatasets();
@@ -259,11 +385,17 @@ function drawChart(canvasEl, opts, noteEl) {
     spec.type = "bar";
     // 색을 통일하지 않으면 막대마다 다른 색이 돌아가며 칠해진다
     spec.datasets = d.points.map((p) => ({ label: fmtTime(p.t), value: p.v, color: "#2563eb" }));
-    if (noteEl && picked.length > 1) noteEl.textContent = `막대그래프에는 첫 번째 측정(${d.title})만 보여요.`;
+    if (noteEl) {
+      const head = picked.length > 1 ? `막대그래프에는 첫 번째 측정(${d.title})만 보여요. ` : "";
+      // 막대그래프에는 시간축이 없으므로 메모선을 찍을 수 없다
+      noteEl.textContent = `${head}메모선은 선그래프에서만 찍을 수 있어요.`;
+    }
   } else {
     spec.type = "line";
     spec.datasets = picked.map((d) => ({ label: `${d.title}`, points: d.points }));
-    spec.events = picked.flatMap((d) => d.events || []);
+    spec.events = picked.flatMap((d) => d.events || []);   // 회색 — 수집기가 기록한 원본 (건드리지 않는다)
+    spec.annotations = analysis.annotations;               // 빨강 — 학생이 단 메모 (analysis에만 저장)
+    if (opts.onPickTime) spec.onAddAnnotation = opts.onPickTime;
   }
   renderChart(canvasEl, spec);
 }
@@ -347,6 +479,17 @@ function injectStyle() {
     .exp1-table { border-collapse: collapse; font-size: 14px; margin: 8px 0; width: 100%; }
     .exp1-table th, .exp1-table td { border: 1px solid #ddd; padding: 4px 8px; text-align: left; }
     .exp1-table th { background: #f6f7f9; }
+    /* 계획을 세우기 전 잠긴 영역 — 보이되 누를 수 없다 */
+    .exp1-locked { opacity: 0.45; filter: grayscale(0.4); }
+    .exp1-lockmsg { margin: 4px 2px; color: #b45309; font-size: 15px; }
+    /* 사건 메모선 입력칸·목록 */
+    .exp1-anno-form { border: 1px solid #fca5a5; background: #fef2f2; border-radius: 8px; padding: 8px 12px; margin: 6px 0; }
+    .exp1-anno-row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-top: 6px; }
+    .exp1-anno-row input { flex: 1 1 180px; padding: 4px 8px; }
+    .exp1-anno-ul { list-style: none; padding: 0; margin: 4px 0; }
+    .exp1-anno-ul li { padding: 3px 0; border-bottom: 1px dashed #eee; }
+    .exp1-anno-ul li b { color: #dc2626; }
+    .exp1-ghost { background: none; border: 1px solid #ccc; border-radius: 6px; color: #555; font-size: 13px; padding: 2px 8px; margin-left: 6px; cursor: pointer; }
   `;
   document.head.append(style);
 }
