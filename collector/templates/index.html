@@ -73,7 +73,7 @@
   <label>이번에 무엇을 다르게 했나요? <input id="condition" placeholder="예: 창문 닫음, 밝은 곳, 물"></label>
   <p class="hint">비교하는 조건을 짧게 써 주세요.</p>
 
-  <label>몇 초마다 한 번씩 잴까요? <input id="intervalSec" type="number" value="10" min="1"></label>
+  <label>몇 초마다 한 번씩 잴까요? <input id="intervalSec" type="number" value="10" min="0.01" step="0.1"></label>
   <p class="hint">보통 그대로 둬도 돼요(10초).</p>
 
   <label>측정 방법</label>
@@ -134,7 +134,7 @@
 
   <div class="chart-wrap"><canvas id="channelsChart" height="180"></canvas></div>
 
-  <label>몇 초마다 잴까요? <input id="channelIntervalSec" type="number" value="10" min="1" step="0.5"></label>
+  <label>몇 초마다 잴까요? <input id="channelIntervalSec" type="number" value="10" min="0.01" step="0.1"></label>
   <p class="hint">물·식용유처럼 빨리 변하는 건 1~2초, 교실 공기처럼 천천히
      변하는 건 10초쯤이 좋아요.</p>
 
@@ -289,8 +289,8 @@ $("btnAddChannel").addEventListener("click", async () => {
 // ── 실시간 센서: 측정 시작·종료·이벤트 (모든 채널 공통) ──
 $("btnStart").addEventListener("click", async () => {
   const intervalSec = parseFloat($("channelIntervalSec").value);
-  if (!(intervalSec >= 1)) {
-    showMsg("측정 간격은 1초 이상으로 해 주세요(센서가 그보다 빨리는 못 읽어요).", true);
+  if (!(intervalSec > 0)) {
+    showMsg("측정 간격은 0보다 커야 해요.", true);
     return;
   }
   const result = await withBusy($("btnStart"), "시작하는 중…", () => postJson("/api/start", { intervalSec }));

@@ -197,8 +197,8 @@ def api_start():
                 interval_sec = float(data["intervalSec"])
             except (TypeError, ValueError):
                 return jsonify(ok=False, error="측정 간격이 올바르지 않습니다"), 400
-            if interval_sec < 1:
-                return jsonify(ok=False, error="측정 간격은 1초 이상으로 해 주세요(센서가 그보다 빨리는 못 읽어요)"), 400
+            if interval_sec <= 0:
+                return jsonify(ok=False, error="측정 간격은 0보다 커야 합니다"), 400
             SESSION.meta["interval_sec"] = interval_sec
         try:
             if SESSION.mode == "realtime":
