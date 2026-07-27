@@ -4,7 +4,22 @@
 // 갱신되게 한다. Chart.js가 없어도(오프라인) updateChannelsChart(static/
 // chart.js) 안에서 건너뛰므로 여기는 그 걱정을 안 해도 된다.
 
-function renderChannels(channels) {
+let currentMeasurementStatus = "idle";
+let currentChannelCount = 0;
+
+function setMeasurementControls(status) {
+  currentMeasurementStatus = status;
+  const measuring = status === "measuring";
+  document.getElementById("btnStart").disabled = measuring || currentChannelCount === 0;
+  document.getElementById("btnStop").disabled = !measuring;
+  document.getElementById("btnEvent").disabled = !measuring;
+  document.getElementById("btnScan").disabled = measuring;
+  document.getElementById("btnAddChannel").disabled = measuring;
+  document.getElementById("measureStatus").hidden = !measuring;
+}
+
+function renderChannels(channels, status = currentMeasurementStatus) {
+  currentChannelCount = channels.length;
   const list = document.getElementById("channelList");
   list.innerHTML = "";
   channels.forEach((ch) => {
@@ -15,7 +30,7 @@ function renderChannels(channels) {
       `<span class="val">${value}</span>`;
     list.appendChild(li);
   });
-  document.getElementById("btnStart").disabled = channels.length === 0;
+  setMeasurementControls(status);
   updateChannelsChart(channels); // static/chart.js — CDN이 안 불려도 그 안에서 건너뛴다
   // ★ 안전장치 — 채널 하나라도 저장 한도(§5.2)에 가까워지면 알린다.
   document.getElementById("pointsWarning").hidden = !channels.some((ch) => ch.nearLimit);
@@ -28,10 +43,9 @@ function pollStatus() {
     const res = await fetch("/api/status");
     const data = await res.json();
     if (data.ok && data.channels) {
-      renderChannels(data.channels);
+      renderChannels(data.channels, data.status);
       if (data.status !== "measuring") {
         clearInterval(pollTimer);
-        document.getElementById("measureStatus").hidden = true;
       }
     }
   }, 800);

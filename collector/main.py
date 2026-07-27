@@ -66,13 +66,22 @@ class _Session:
         self.reset()
 
     def reset(self) -> None:
+        # 설정을 다시 시작하면 기존 폴링 스레드와 블루투스 연결을 먼저 정리한다.
+        for channel in getattr(self, "channels", []):
+            channel.source.disconnect()
         self.mode: str | None = None  # "realtime" | "manual"
         self.channels: list[_Channel] = []  # mode == "realtime"
         self.manual_source = None  # mode == "manual" — sensor.ManualInputSource
         self.manual_sensor_name: str | None = None
         self.meta: dict = {}  # 학급·모둠·실험번호·조건·측정 간격 — 채널이 공유한다
         self.started_at: datetime | None = None
-        self.status = "idle"  # idle | measuring | stopped
+        self.status = "idle"  # idle | measuring | stopped | uploaded
+        self.uploaded = False
+
+    def has_data(self) -> bool:
+        if self.mode == "realtime":
+            return any(ch.source.latest_points() for ch in self.channels)
+        return bool(self.manual_source and self.manual_source.latest_points())
 
 
 # 노트북 1대 = 그 순간 모둠 1개가 쓰는 도구라, 세션을 전역 상태 하나로 둔다.
@@ -187,6 +196,8 @@ def api_add_channel():
     with LOCK:
         if SESSION.mode != "realtime":
             return jsonify(ok=False, error="먼저 1단계에서 실시간 측정을 선택하세요"), 400
+        if SESSION.status == "measuring":
+            return jsonify(ok=False, error="측정 중에는 센서를 추가할 수 없습니다"), 409
         if any(ch.device_id == device_id for ch in SESSION.channels):
             return jsonify(ok=False, error=f"센서 {device_id}는 이미 추가했습니다"), 400
 
@@ -210,6 +221,28 @@ def api_start():
     다시 보내는 값을 쓴다 — 안 보내면 1단계에서 정한 값을 그대로 쓴다."""
     data = request.get_json(silent=True) or {}
     with LOCK:
+        if SESSION.status == "measuring":
+            return jsonify(ok=False, error="이미 측정 중입니다"), 409
+
+        restart_mode = data.get("restartMode")
+        if (
+            SESSION.mode == "realtime"
+            and SESSION.status in ("stopped", "uploaded")
+            and restart_mode not in ("continue", "new")
+        ):
+            return jsonify(
+                ok=False,
+                error="이어서 잴지 새로 잴지 골라 주세요",
+                needsRestartChoice=True,
+                hasUnsavedData=SESSION.has_data() and not SESSION.uploaded,
+                uploaded=SESSION.uploaded,
+            ), 409
+        if SESSION.mode == "realtime" and restart_mode == "continue" and SESSION.uploaded:
+            return jsonify(
+                ok=False,
+                error="이미 서버로 보낸 측정은 이어 잴 수 없습니다. 새로 재기를 골라 주세요.",
+            ), 409
+
         if "intervalSec" in data:
             try:
                 interval_sec = float(data["intervalSec"])
@@ -218,21 +251,29 @@ def api_start():
             if interval_sec < MIN_INTERVAL_SEC:
                 return jsonify(ok=False, error=f"측정 간격은 {MIN_INTERVAL_SEC}초 이상이어야 합니다"), 400
             SESSION.meta["interval_sec"] = interval_sec
+        keep_existing = restart_mode == "continue"
+        started_sources = []
         try:
             if SESSION.mode == "realtime":
                 if not SESSION.channels:
                     return jsonify(ok=False, error="먼저 센서를 하나 이상 추가하세요"), 400
                 for ch in SESSION.channels:
-                    ch.source.start(SESSION.meta["interval_sec"])
+                    ch.source.start(SESSION.meta["interval_sec"], keep_existing=keep_existing)
+                    started_sources.append(ch.source)
             elif SESSION.mode == "manual":
                 if SESSION.manual_source is None:
                     return jsonify(ok=False, error="먼저 센서를 선택하세요"), 400
-                SESSION.manual_source.start()
+                SESSION.manual_source.start(keep_existing=keep_existing)
             else:
                 return jsonify(ok=False, error="먼저 1단계를 채우세요"), 400
         except sensor.SensorConnectionError as exc:
+            # 여러 센서 중 하나가 시작에 실패하면 앞에서 시작한 센서도 함께 멈춘다.
+            for source in started_sources:
+                source.stop()
             return jsonify(ok=False, error=str(exc)), 400
-        SESSION.started_at = datetime.now(timezone.utc)
+        if not keep_existing:
+            SESSION.started_at = datetime.now(timezone.utc)
+        SESSION.uploaded = False
         SESSION.status = "measuring"
     return jsonify(ok=True)
 
@@ -295,28 +336,34 @@ def api_status():
     with LOCK:
         if SESSION.mode == "realtime":
             channels = [ch.to_dict() for ch in SESSION.channels]
-            return jsonify(ok=True, status=SESSION.status, channels=channels)
+            return jsonify(
+                ok=True, status=SESSION.status, channels=channels,
+                hasData=SESSION.has_data(), uploaded=SESSION.uploaded,
+            )
         points = SESSION.manual_source.latest_points() if SESSION.manual_source else []
         return jsonify(
             ok=True, status=SESSION.status, points=points,
             nearLimit=len(points) >= NEAR_LIMIT_POINTS,
+            hasData=bool(points), uploaded=SESSION.uploaded,
         )
 
 
 @app.route("/api/stop", methods=["POST"])
 def api_stop():
     with LOCK:
+        if SESSION.status != "measuring":
+            return jsonify(ok=False, error="측정 중이 아닙니다"), 409
         if SESSION.mode == "realtime":
             if not SESSION.channels:
                 return jsonify(ok=False, error="측정 중이 아닙니다"), 400
             counts = [len(ch.source.stop()[0]) for ch in SESSION.channels]
             SESSION.status = "stopped"
-            return jsonify(ok=True, counts=counts)
+            return jsonify(ok=True, counts=counts, hasData=SESSION.has_data())
         if SESSION.manual_source is None:
             return jsonify(ok=False, error="측정 중이 아닙니다"), 400
         points, _events = SESSION.manual_source.stop()
         SESSION.status = "stopped"
-    return jsonify(ok=True, count=len(points))
+    return jsonify(ok=True, count=len(points), hasData=bool(points))
 
 
 def _build_dataset(meta: dict, title: str, sensor_name: str, unit: str,
@@ -347,6 +394,8 @@ def api_upload():
     학생과 똑같이 익명 로그인 뒤 그 자격으로 올린다(관리자 권한을 쓰지 않는다).
     채널이 여러 개면 로그인은 한 번만 하고 같은 토큰을 재사용한다."""
     with LOCK:
+        if SESSION.mode == "realtime" and SESSION.status == "measuring":
+            return jsonify(ok=False, error="측정을 먼저 종료한 뒤 서버로 보내 주세요"), 409
         meta = SESSION.meta
 
         try:
@@ -383,6 +432,8 @@ def api_upload():
                     results.append({"deviceId": ch.device_id, "label": ch.label, "datasetId": dataset_id})
             except uploader.UploadError as exc:
                 return jsonify(ok=False, error=str(exc)), 500
+            SESSION.uploaded = True
+            SESSION.status = "uploaded"
             return jsonify(ok=True, results=results)
 
         if SESSION.manual_source is None:
@@ -399,6 +450,8 @@ def api_upload():
         except uploader.UploadError as exc:
             return jsonify(ok=False, error=str(exc)), 500
 
+        SESSION.uploaded = True
+        SESSION.status = "uploaded"
     return jsonify(ok=True, datasetId=dataset_id)
 
 

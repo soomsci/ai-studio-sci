@@ -186,15 +186,22 @@ class PascoSensorSource:
     def is_connected(self) -> bool:
         return bool(self._device and self._device.is_connected())
 
-    def start(self, interval_sec: float) -> None:
+    def start(self, interval_sec: float, keep_existing: bool = False) -> None:
         """폴링 스레드를 시작한다. pasco의 read_data()는 문서상 동기(블로킹) 호출이라
-        별도 스레드에서 반복 실행해 로컬 웹 화면이 멈추지 않게 한다."""
-        if not self._device:
+        별도 스레드에서 반복 실행해 로컬 웹 화면이 멈추지 않게 한다.
+
+        keep_existing=True면 직전 측정의 points/events를 남기고 마지막 시각부터
+        이어 잰다. 측정을 잠시 멈춘 시간은 경과 시간에 넣지 않는다."""
+        if self._thread and self._thread.is_alive():
+            raise SensorConnectionError("이미 측정 중입니다")
+        if not self.is_connected():
             raise SensorConnectionError("connect()를 먼저 호출해야 합니다")
-        self._points = []
+        if not keep_existing:
+            self._points = []
+            self._events = []
         self._bucket = []
-        self._events = []
-        self._start_time = time.monotonic()
+        last_t = self._points[-1]["t"] if keep_existing and self._points else 0
+        self._start_time = time.monotonic() - last_t
         self._stop_flag.clear()
         self._thread = threading.Thread(target=self._poll_loop, args=(interval_sec,), daemon=True)
         self._thread.start()
@@ -261,12 +268,20 @@ class PascoSensorSource:
         return list(self._events)
 
     def stop(self) -> tuple[list[dict], list[dict]]:
+        """측정만 멈춘다. 연결은 다음 측정을 위해 유지한다."""
         self._stop_flag.set()
         if self._thread:
             self._thread.join(timeout=5)
+            self._thread = None
+        return self._points, self._events
+
+    def disconnect(self) -> None:
+        """사용을 완전히 끝낼 때 센서 연결을 해제한다."""
+        if self._thread and self._thread.is_alive():
+            self.stop()
         if self._device:
             self._device.disconnect()  # ⚠ 센서 입수 후 테스트 필요
-        return self._points, self._events
+            self._device = None
 
 
 class ManualInputSource:
@@ -282,10 +297,12 @@ class ManualInputSource:
         self._events: list[dict] = []
         self._start_time: float | None = None
 
-    def start(self) -> None:
-        self._points = []
-        self._events = []
-        self._start_time = time.monotonic()
+    def start(self, keep_existing: bool = False) -> None:
+        if not keep_existing:
+            self._points = []
+            self._events = []
+        last_t = self._points[-1]["t"] if keep_existing and self._points else 0
+        self._start_time = time.monotonic() - last_t
 
     def add_point(self, value: float, t: float | None = None) -> None:
         """t를 안 주면 '지금'을 측정 시작 이후 경과 초로 계산한다."""
