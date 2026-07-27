@@ -2,19 +2,24 @@
 //
 // 화면 구성 (위 → 아래):
 //   ① 탐구 질문 헤더 + 모둠별 주제 선택(§10.3) — 주제를 고르기 전엔 아래가 안 보인다
-//   ② 우리 모둠 측정 목록 + 연습 데이터 만들기 + 분석에 쓸 측정 고르기 (exp1과 동일 패턴)
-//   ③ 분석 5단계 (steps.js의 renderSteps) — 주제에 따라 산점도/선그래프로 갈라진다
+//   ② 실험 계획 세우기 (config의 designStepsCommon + 주제별 designStepExtra) — 다 채워야 아래가 열린다
+//   ③ 우리 모둠 측정 목록 + 연습 데이터 만들기 + 분석에 쓸 측정 고르기 (exp1과 동일 패턴)
+//   ④ 분석 5단계 (steps.js의 renderSteps) — 주제에 따라 산점도/선그래프로 갈라진다.
+//      1단계에 원본 표+CSV, s1과 s2 사이에 축 고르기 관문(g1)이 주제별로 다르게 있다.
 //
 // 주제①(운동 강도-심박수)은 측정 1건 = 점 1개인 산점도, 주제②(회복 속도)는
 // exp1과 같은 선그래프다. 기준선 대신 "학급 평균선"을 쓰고(§10.3), 산점도에는
 // 학급 전체를 익명으로 겹쳐 보는 토글이 있다(절대 규칙 2·3 — 모둠 단위로만 비교).
+// 사건 메모선(빨강)은 시간축이 있는 주제②(선그래프)에만 연결한다 — 산점도는 시간축이 없다.
 //
 // 문구·질문·그래프 설정은 전부 config/exp3.config.js에 있다.
 
 import { EXP3, TOPICS } from "../config/exp3.config.js";
 import { listDatasets, listClassDatasets, saveDataset, getAnalysis, saveAnalysis } from "./data.js";
 import { renderChart } from "./chart-kit.js";
-import { renderSteps } from "./steps.js";
+import { renderSteps, isStepsComplete } from "./steps.js";
+import { renderRawDataTable } from "./raw-data.js";
+import { mountAnnotations } from "./annotations.js";
 import { getSession } from "./auth.js";
 
 // 탭이 열려 있는 동안의 상태
@@ -83,7 +88,10 @@ function currentTopicConfig() {
   if (!id) return null;
   const meta = TOPICS.find((t) => t.id === id);
   if (!meta || !meta.ready) return null;
-  return { ...meta, ...EXP3[id] };
+  const topic = { ...meta, ...EXP3[id] };
+  // 설계 단계 = 공통 2단계(d1·d2) + 주제별 1단계(d3, §12.2 — 주제마다 고민 지점이 다르다)
+  topic.designSteps = [...EXP3.designStepsCommon, topic.designStepExtra];
+  return topic;
 }
 
 // ── ② + ③ 주제를 고른 뒤에만 보이는 본문 ─────────────────────
@@ -99,7 +107,15 @@ async function renderBody() {
   bodyEl.innerHTML = `
     <p class="exp3-question">탐구 질문: <strong>${topic.question}</strong></p>
 
-    <section class="exp3-box">
+    <section class="exp3-box" id="exp3-design">
+      <h3>실험 계획 세우기</h3>
+      <p class="exp3-help">재기 전에 어떻게 실험할지 먼저 정해요. 다 적으면 아래 측정 화면이 열려요.</p>
+      <div id="exp3-design-steps"></div>
+    </section>
+
+    <p class="exp3-lockmsg" id="exp3-lockmsg" hidden></p>
+
+    <section class="exp3-box" id="exp3-measure">
       <h3>우리 모둠의 측정</h3>
       <p class="exp3-help">분석에 쓸 측정을 골라 주세요.</p>
       <div id="exp3-list"><p class="exp3-dim">측정 목록을 불러오는 중…</p></div>
@@ -121,7 +137,7 @@ async function renderBody() {
   await reloadDatasets(topic);
 }
 
-// 측정 목록을 불러와 목록 + 단계를 그린다
+// 측정 목록을 불러와 설계 단계 + 목록 + 분석 단계를 그린다
 async function reloadDatasets(topic) {
   datasets = await listDatasets(EXP3.expNo, session.groupId);
 
@@ -130,8 +146,37 @@ async function reloadDatasets(topic) {
   if (!picked.length) picked = [...ids];
   analysis.datasetIds = picked;
 
+  // 실험 계획 단계 — 다 채우면 (다섯 번째 인자로) 알려 준다
+  renderSteps(
+    rootEl.querySelector("#exp3-design-steps"),
+    topic.designSteps,
+    analysis,
+    saveAnalysis,
+    () => applyLock(topic)
+  );
+
   renderDatasetList(rootEl.querySelector("#exp3-list"), topic);
   renderSteps(rootEl.querySelector("#exp3-steps"), buildSteps(topic), analysis, saveAnalysis);
+  applyLock(topic); // 새로고침으로 다시 들어온 모둠도 지금 상태로 판단한다
+}
+
+// ── 계획을 세우기 전에는 측정·분석을 잠가 둔다 (exp1과 동일 패턴) ──
+// ★ 이미 잰 측정이 하나라도 있으면 잠그지 않는다 — 수집기로 먼저 잰 모둠이
+//   웹앱에서 막히면 수업이 그 자리에서 멈추기 때문이다.
+function applyLock(topic) {
+  const msgEl = rootEl.querySelector("#exp3-lockmsg");
+  if (!msgEl) return; // 주제를 바꾸는 사이에 화면이 이미 지나갔을 수 있다
+  const locked = datasets.length === 0 && !isStepsComplete(topic.designSteps, analysis);
+  msgEl.hidden = !locked;
+  msgEl.textContent = locked
+    ? "🔒 먼저 실험 계획을 세워 보세요. 위 단계를 다 적으면 아래에서 측정을 시작할 수 있어요."
+    : "";
+  for (const sel of ["#exp3-measure", "#exp3-steps"]) {
+    const el = rootEl.querySelector(sel);
+    if (!el) continue;
+    el.classList.toggle("exp3-locked", locked);
+    el.inert = locked; // 잠긴 동안은 누르기·글쓰기가 되지 않는다
+  }
 }
 
 function pickedDatasets() {
@@ -187,10 +232,10 @@ async function onMakePractice(topic) {
 
 // ── 분석 5단계 — 주제별 steps에 render 훅을 끼운다 ──────────
 function buildSteps(topic) {
-  const hooks = { s2: renderStep2Chart, s3: renderStep3Chart };
+  const hooks = { s1: renderStep1Raw, s2: renderStep2Chart, s3: renderStep3Chart };
   return topic.steps.map((step) => {
     const hook = hooks[step.id];
-    if (!hook) return step; // 1·4·5단계는 글로만 답한다
+    if (!hook) return step; // 축 관문(g1)·4·5단계는 render 훅이 없다
     return {
       ...step,
       render: (slotEl) => {
@@ -203,10 +248,23 @@ function buildSteps(topic) {
 
 // 측정 선택이 바뀌었을 때, 이미 그려져 있는 단계 내용을 다시 그린다
 function refreshSlots(topic) {
-  const hooks = { s2: renderStep2Chart, s3: renderStep3Chart };
+  const hooks = { s1: renderStep1Raw, s2: renderStep2Chart, s3: renderStep3Chart };
   for (const [id, el] of Object.entries(slots)) {
     if (el.isConnected) hooks[id](el, topic);
   }
+}
+
+// 1단계: 원본 측정값 표 + CSV (읽기 전용, raw-data.js)
+function renderStep1Raw(slotEl) {
+  const picked = pickedDatasets();
+  if (!picked.length) {
+    slotEl.innerHTML = `<p class="exp3-dim">위에서 측정을 골라 주세요.</p>`;
+    return;
+  }
+  slotEl.innerHTML = `
+    <p class="exp3-help">아래는 센서가 기록한 값 그대로예요. 표를 넘겨 보거나 파일로 내려받아 확인해 보세요.</p>
+    <div id="exp3-raw"></div>`;
+  renderRawDataTable(slotEl.querySelector("#exp3-raw"), picked, "측정데이터_실험3");
 }
 
 // 2단계: 그래프 + "학급과 비교해서 보기" 토글
@@ -214,6 +272,7 @@ function refreshSlots(topic) {
 function renderStep2Chart(slotEl, topic) {
   const opts = analysis.chartOptions;
   if (opts.showClass === undefined) opts.showClass = true;
+  const isLine = topic.chartMode === "line"; // 사건 메모선은 시간축이 있는 주제②(선그래프)에만 연결한다
 
   slotEl.innerHTML = `
     <label class="exp3-toggle">
@@ -221,6 +280,7 @@ function renderStep2Chart(slotEl, topic) {
       학급 전체와 비교해서 보기 (다른 모둠은 익명으로 표시돼요)
     </label>
     <div class="exp3-chartbox"><canvas></canvas></div>
+    ${isLine ? `<div id="exp3-anno"></div>` : ""}
   `;
 
   slotEl.querySelector("#exp3-classtoggle").addEventListener("change", async (e) => {
@@ -229,11 +289,23 @@ function renderStep2Chart(slotEl, topic) {
     draw();
   });
 
-  const draw = () => drawChart(slotEl.querySelector("canvas"), topic, opts);
+  // ★ 여기서 딱 한 번만 붙인다. draw() 안에서 붙이면 그래프를 다시 그릴 때마다
+  //   학생이 쓰던 메모 글이 지워진다.
+  const anno = isLine
+    ? mountAnnotations(slotEl.querySelector("#exp3-anno"), {
+        analysis,
+        onSave: saveAnalysis,
+        onChange: () => draw(),
+        placeholder: "예) 운동 끝",
+      })
+    : null;
+
+  const draw = () => drawChart(slotEl.querySelector("canvas"), topic, opts, anno);
   draw();
 }
 
 // 3단계: 그래프(좌표 확인용, 항상 학급 비교 포함) + 자동 계산 표
+// 여기서는 메모선을 새로 찍지 않고 2단계에서 단 메모와 패턴을 견주어 보기만 한다(anno 없음).
 function renderStep3Chart(slotEl, topic) {
   slotEl.innerHTML = `
     <div class="exp3-chartbox"><canvas></canvas></div>
@@ -261,7 +333,8 @@ function renderStep3Chart(slotEl, topic) {
 }
 
 // 고른 측정들을 그린다. 주제에 따라 산점도/선그래프로 갈라진다.
-async function drawChart(canvasEl, topic, opts) {
+// anno: 사건 메모선 컨트롤(annotations.js) — 산점도(주제①)에는 없다(시간축이 없어서).
+async function drawChart(canvasEl, topic, opts, anno) {
   const picked = pickedDatasets();
   if (!picked.length) {
     canvasEl.replaceWith(Object.assign(document.createElement("p"), {
@@ -270,7 +343,7 @@ async function drawChart(canvasEl, topic, opts) {
     return;
   }
   if (topic.chartMode === "scatter") await drawScatterChart(canvasEl, topic, opts, picked);
-  else await drawLineChart(canvasEl, topic, opts, picked);
+  else await drawLineChart(canvasEl, topic, opts, picked, anno);
 }
 
 // ── 주제① 산점도: 운동 강도 → 최고 심박수 ───────────────────
@@ -310,15 +383,17 @@ async function drawScatterChart(canvasEl, topic, opts, picked) {
 }
 
 // ── 주제② 선그래프: 심박수 회복 곡선 ─────────────────────────
-async function drawLineChart(canvasEl, topic, opts, picked) {
+async function drawLineChart(canvasEl, topic, opts, picked, anno) {
   const spec = {
     type: "line",
     xLabel: topic.xLabel,
     yLabel: topic.yLabel,
     tooltip: topic.tooltip,
     datasets: picked.map((d) => ({ label: d.title, points: d.points })),
-    events: picked.flatMap((d) => d.events || []),
+    events: picked.flatMap((d) => d.events || []),  // 회색 — 수집기가 기록한 원본 (건드리지 않는다)
+    annotations: analysis.annotations || [],        // 빨강 — 학생이 단 메모 (analysis에만 저장)
   };
+  if (anno) spec.onAddAnnotation = anno.openAt; // 3단계에서는 anno가 없어 새로 찍지 못하고 보기만 한다
 
   if (opts.showClass) {
     const classDatasets = await listClassDatasets(EXP3.expNo);
@@ -333,6 +408,7 @@ async function drawLineChart(canvasEl, topic, opts, picked) {
   }
 
   renderChart(canvasEl, spec);
+  if (anno) anno.refresh();
 }
 
 // ── 자동 계산 ─────────────────────────────────────────────
@@ -404,6 +480,9 @@ function injectStyle() {
     .exp3-table th, .exp3-table td { border: 1px solid #ddd; padding: 4px 8px; text-align: left; }
     .exp3-table th { background: #f6f7f9; }
     #exp3-topic-select { font-size: 14px; padding: 4px 6px; margin-top: 6px; }
+    /* 계획을 세우기 전 잠긴 영역 — 보이되 누를 수 없다 (exp1과 동일) */
+    .exp3-locked { opacity: 0.45; filter: grayscale(0.4); }
+    .exp3-lockmsg { margin: 4px 2px; color: #b45309; font-size: 15px; }
   `;
   document.head.append(style);
 }
