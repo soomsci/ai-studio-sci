@@ -8,15 +8,18 @@
 //
 // 화면 구성 (위 → 아래):
 //   ① 안전 주의 + 탐구 질문 헤더
-//   ② 우리 모둠 측정 목록 + 연습 데이터 만들기 + 분석에 쓸 측정 고르기
-//   ③ 분석 5단계 (steps.js의 renderSteps)
+//   ② 실험 계획 세우기 (config의 designSteps) — 다 채워야 아래가 열린다
+//   ③ 우리 모둠 측정 목록 + 연습 데이터 만들기 + 분석에 쓸 측정 고르기
+//   ④ 분석 5단계 (steps.js의 renderSteps)
 //
 // 문구·질문·그래프 설정은 전부 config/exp4.config.js에 있다.
 
 import { EXP4 } from "../config/exp4.config.js";
 import { listDatasets, saveDataset, getAnalysis, saveAnalysis } from "./data.js";
 import { renderChart } from "./chart-kit.js";
-import { renderSteps } from "./steps.js";
+import { renderSteps, isStepsComplete } from "./steps.js";
+import { renderRawDataTable } from "./raw-data.js";
+import { mountAnnotations } from "./annotations.js";
 import { getSession } from "./auth.js";
 
 // 탭이 열려 있는 동안의 상태 (탭을 다시 열면 mount가 새로 채운다)
@@ -41,7 +44,15 @@ export async function mount(containerEl) {
       <p class="exp4-question">탐구 질문: <strong>${EXP4.question}</strong></p>
     </section>
 
-    <section class="exp4-box">
+    <section class="exp4-box" id="exp4-design">
+      <h3>실험 계획 세우기</h3>
+      <p class="exp4-help">불을 켜기 전에 어떻게 실험할지 먼저 정해요. 세 가지를 다 적으면 아래 측정 화면이 열려요.</p>
+      <div id="exp4-design-steps"></div>
+    </section>
+
+    <p class="exp4-lockmsg" id="exp4-lockmsg" hidden></p>
+
+    <section class="exp4-box" id="exp4-measure">
       <h3>우리 모둠의 측정</h3>
       <p class="exp4-help">물과 식용유를 함께 골라야 비교할 수 있어요. 고른 측정이 그래프에 겹쳐 그려져요.</p>
       <div id="exp4-list"><p class="exp4-dim">측정 목록을 불러오는 중…</p></div>
@@ -71,8 +82,11 @@ async function reload() {
   ]);
   analysis.expNo = EXP4.expNo;
   analysis.groupId = session.groupId;
-  analysis.chartOptions = analysis.chartOptions || { chartType: "line", showDelta: false };
+  // 빈 분석 문서는 chartOptions가 {}로 온다. || 로는 빈 객체가 그대로 남아
+  // chartType이 undefined가 되고, Firestore가 저장을 통째로 거부한다.
+  analysis.chartOptions = { chartType: "line", showDelta: false, ...(analysis.chartOptions || {}) };
   analysis.chartType = analysis.chartOptions.chartType;
+  analysis.annotations = analysis.annotations || []; // 학생이 그래프에 남긴 사건 메모선
 
   // 지워진 측정은 선택에서 빼고, 아무것도 안 골랐으면 전부 고른 것으로 시작한다
   const ids = datasets.map((d) => d.id);
