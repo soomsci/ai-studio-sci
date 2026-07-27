@@ -52,6 +52,8 @@ async function enterDashboard() {
   document.getElementById("login-gate").style.display = "none";
   document.getElementById("dashboard").style.display = "block";
   document.getElementById("teacher-label").textContent = currentUser.email || "";
+  const dashboardError = document.getElementById("dashboard-error");
+  dashboardError.style.display = "none";
 
   document.getElementById("logout-btn").addEventListener("click", async () => {
     if (isConfigured) {
@@ -72,7 +74,16 @@ async function enterDashboard() {
   });
   document.getElementById("delete-class-btn").addEventListener("click", handleDeleteClass);
 
-  await refreshClassList();
+  try {
+    await refreshClassList();
+  } catch (err) {
+    console.error(err);
+    const denied = err?.code === "permission-denied" || /permission/i.test(err?.message || "");
+    dashboardError.textContent = denied
+      ? `이 계정은 교사 허용 목록에 없어요. 관리자에게 다음 계정 UID를 등록해 달라고 알려 주세요: ${currentUser.uid}`
+      : "학급 정보를 불러오지 못했어요. 인터넷 연결을 확인하고 다시 로그인해 주세요.";
+    dashboardError.style.display = "block";
+  }
 }
 
 // 드롭다운만 다시 채운다 (선택은 건드리지 않는다)

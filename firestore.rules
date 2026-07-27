@@ -14,8 +14,9 @@ rules_version = '2';
 //
 // 요지:
 //   - joinCodes: get만 허용(문서 하나 지정). list 차단 → 코드를 모르면 학급을 못 찾는다
-//   - classes: get은 인증자 모두, list는 자기(teacherUid) 학급 조건 쿼리만 통과.
-//     만들기·고치기·지우기는 익명이 아닌 계정(교사)만 — 익명 학생의 유령 학급 차단
+//   - teachers: Firebase 콘솔/Admin SDK에서만 등록. 자기 허용 여부 읽기만 가능
+//   - classes: get은 인증자 모두, list는 허용된 교사의 자기 학급 조건 쿼리만 통과.
+//     만들기·고치기·지우기는 teachers/{uid}에 등록된 계정만 가능
 //   - datasets: 읽기는 인증자(학급 비교용), 쓰기는 본인·교사 + 크기 검증
 //   - 인증 없는 접근: 전면 차단 (기본 거부)
 
@@ -26,7 +27,8 @@ service cloud.firestore {
       return request.auth != null;
     }
 
-    // 익명 로그인이 아닌 실제 계정인가 (= 교사). 학생은 익명으로 들어온다.
+    // 익명 로그인이 아닌 실제 계정인가. 이것만으로는 교사라는 뜻이 아니다.
+    // 학생도 Google 계정으로 로그인할 수 있으므로 교사 권한에는 approvedTeacher()를 쓴다.
     // 2026-07-27 이 프로젝트의 실제 익명 토큰을 열어 확인한 값:
     //   firebase.sign_in_provider == "anonymous", identities == {}, email 없음
     // 교사(teacher.js)는 구글 로그인만 쓰므로 "google.com"이 들어온다.
@@ -36,9 +38,16 @@ service cloud.firestore {
       return signedIn() && request.auth.token.firebase.sign_in_provider != 'anonymous';
     }
 
+    // 교사 허용 목록. teachers/{uid} 문서는 Firebase 콘솔 또는 Admin SDK로만 만든다.
+    // 클라이언트 쓰기 규칙을 열지 않아 사용자가 스스로 교사 권한을 만들 수 없게 한다.
+    function approvedTeacher() {
+      return realAccount()
+        && exists(/databases/$(database)/documents/teachers/$(request.auth.uid));
+    }
+
     // 해당 학급의 교사인가 (classes 문서의 teacherUid와 비교)
     function isTeacherOf(classId) {
-      return realAccount()
+      return approvedTeacher()
         && get(/databases/$(database)/documents/classes/$(classId)).data.teacherUid == request.auth.uid;
     }
 
@@ -46,6 +55,12 @@ service cloud.firestore {
     function validDataset() {
       return request.resource.data.points.size() <= 5000
         && request.resource.data.expNo in [1, 2, 3, 4]; // 4 = 비열 (v2.0)
+    }
+
+    // 교사 허용 목록은 서버 관리 전용이다. 로그인한 사용자는 자기 등록 여부만 읽는다.
+    // create/update/delete 허용 규칙이 없으므로 브라우저에서는 목록을 바꿀 수 없다.
+    match /teachers/{teacherId} {
+      allow get: if realAccount() && request.auth.uid == teacherId;
     }
 
     // 입장 코드 → 학급 찾기 (v1.7). 코드를 아는 사람만 문서 하나를 집어 읽는다.
@@ -63,11 +78,12 @@ service cloud.firestore {
       allow get: if signedIn();
       // list: 교사가 where("teacherUid","==",본인)으로 거는 쿼리만 통과.
       // 조건 없는 전체 조회는 남의 학급이 섞일 수 있으므로 Firestore가 거부한다.
-      allow list: if signedIn() && resource.data.teacherUid == request.auth.uid;
+      allow list: if approvedTeacher() && resource.data.teacherUid == request.auth.uid;
       // 학급 생성·수정·삭제는 교사만.
-      // signedIn()만 보면 익명 학생이 자기 uid를 교사라고 적어 유령 학급을
-      // 무제한 만들 수 있었다(BUG-03). 그 안에 생긴 분석 문서는 아무도 못 지운다.
-      allow create: if realAccount() && request.resource.data.teacherUid == request.auth.uid;
+      // 익명 여부만 보면 Google 계정이 있는 학생도 교사 페이지에서 학급을 만들 수 있다.
+      // 허용 목록과 teacherUid를 함께 확인해 승인된 교사만 자기 학급을 만들게 한다.
+      allow create: if approvedTeacher()
+        && request.resource.data.teacherUid == request.auth.uid;
       allow update, delete: if isTeacherOf(classId);
 
       match /groups/{groupId} {
