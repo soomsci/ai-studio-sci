@@ -10,7 +10,9 @@
 //   csvFileName : (선택) 주면 표 위에 "CSV로 내려받기" 단추가 생긴다.
 //                 예: "측정데이터_실험1"  (".csv"는 알아서 붙는다)
 //   → 측정마다 시각(분:초)·경과 초·값(단위) 표를 그린다.
-//     점이 많으면(수백 개) 스크롤 영역에 담아 화면을 해치지 않는다.
+//     점이 300개를 넘으면 쪽으로 나눠 그린다(앞쪽·뒤쪽 단추). 한 번에 수천 줄을
+//     그리면 모둠 노트북이 버벅이기 때문이다. 내려받는 CSV에는 언제나 전부 담긴다.
+//     값이 하나도 없는 측정은 빈 표 대신 그 사실을 알려 준다.
 //     측정을 여러 개 골랐으면 측정별로 구분해서 보여준다.
 //
 // downloadDatasetsCSV(datasets, csvFileName)
@@ -19,6 +21,10 @@
 //   열: 측정 제목 · 경과 초(t) · 시각(분:초) · 값 · 단위.
 //   측정이 여러 개면 한 파일에 이어 담되 "측정 제목" 열로 구분된다.
 //   단추 없이 직접 불러 써도 된다.
+
+// 표 한 쪽에 보여 줄 값의 개수. 보통 수업 데이터(45분·10초 간격 = 271개)는
+// 한 쪽에 다 들어가고, 아주 촘촘히 잰 측정만 쪽이 나뉜다.
+const PAGE_SIZE = 300;
 
 // 경과 초 → 사람이 읽는 "3분 20초" (chart-kit 말풍선과 같은 형식)
 function formatTime(sec) {
@@ -49,28 +55,73 @@ export function renderRawDataTable(el, datasets, csvFileName) {
   }
 
   // 측정마다 제목 + 점 개수 + 스크롤 표
-  list.forEach((d) => {
-    const box = elem("div", "raw-ds");
-    box.append(elem("h4", "raw-ds-title",
-      `${d.title || "이름 없는 측정"}  ·  ${d.points.length}개 값  ·  단위 ${d.unit || "-"}`));
+  list.forEach((d) => el.append(renderOneDataset(d)));
+}
 
-    const scroll = elem("div", "raw-scroll");
-    const table = elem("table", "raw-table");
-    table.innerHTML =
-      "<thead><tr><th>시각</th><th>경과 시간(초)</th><th>값</th></tr></thead>";
-    const tbody = elem("tbody");
-    d.points.forEach((p) => {
+// 한 측정의 값 표. 점이 많으면 쪽으로 나눠 그린다.
+function renderOneDataset(d) {
+  const box = elem("div", "raw-ds");
+  const total = d.points.length;
+  box.append(elem("h4", "raw-ds-title",
+    `${d.title || "이름 없는 측정"}  ·  ${total}개 값  ·  단위 ${d.unit || "-"}`));
+
+  // 값이 하나도 없는 측정 — 빈 표 대신 그렇다고 알려 준다
+  if (total === 0) {
+    box.append(elem("p", "raw-empty", "이 측정에는 값이 하나도 없어요. 다시 재 보거나 선생님께 알려 주세요."));
+    return box;
+  }
+
+  const scroll = elem("div", "raw-scroll");
+  const table = elem("table", "raw-table");
+  table.innerHTML = "<thead><tr><th>시각</th><th>경과 시간(초)</th><th>값</th></tr></thead>";
+  const tbody = elem("tbody");
+  table.append(tbody);
+  scroll.append(table);
+
+  // 점이 많으면 한 쪽에 PAGE_SIZE개씩만 그린다.
+  // 한 번에 수천 줄을 그리면 모둠 노트북에서 화면이 버벅인다(5,000점 측정 기준).
+  const pages = Math.ceil(total / PAGE_SIZE);
+  let page = 0;
+
+  const drawRows = () => {
+    tbody.innerHTML = "";
+    const from = page * PAGE_SIZE;
+    d.points.slice(from, from + PAGE_SIZE).forEach((p) => {
       const tr = elem("tr");
       tr.append(elem("td", null, formatTime(p.t)));
       tr.append(elem("td", "raw-num", String(p.t)));
       tr.append(elem("td", "raw-num", `${p.v} ${d.unit || ""}`.trim()));
       tbody.append(tr);
     });
-    table.append(tbody);
-    scroll.append(table);
-    box.append(scroll);
-    el.append(box);
-  });
+    scroll.scrollTop = 0; // 쪽을 넘기면 표 맨 위부터 보여 준다
+  };
+
+  // 한 쪽에 다 들어가면 넘기는 단추를 만들지 않는다 (보통 수업 데이터가 여기 해당)
+  if (pages > 1) {
+    const nav = elem("div", "raw-pager");
+    const prev = elem("button", "raw-page-btn", "◀ 앞쪽");
+    const next = elem("button", "raw-page-btn", "뒤쪽 ▶");
+    const label = elem("span", "raw-page-label");
+    prev.type = next.type = "button";
+
+    const update = () => {
+      const from = page * PAGE_SIZE + 1;
+      const to = Math.min((page + 1) * PAGE_SIZE, total);
+      label.textContent = `${page + 1} / ${pages}쪽  (${from}~${to}번째 값)`;
+      prev.disabled = page === 0;
+      next.disabled = page === pages - 1;
+    };
+    prev.addEventListener("click", () => { if (page > 0) { page--; drawRows(); update(); } });
+    next.addEventListener("click", () => { if (page < pages - 1) { page++; drawRows(); update(); } });
+
+    nav.append(prev, label, next);
+    box.append(nav);
+    update();
+  }
+
+  drawRows();
+  box.append(scroll);
+  return box;
 }
 
 // ── CSV 만들기·내려받기 ─────────────────────────────────
@@ -132,6 +183,12 @@ function injectStyleOnce() {
     .raw-data .raw-table th, .raw-data .raw-table td { padding:5px 12px; border-bottom:1px solid #f0f0f0; text-align:left; }
     .raw-data .raw-table thead th { position:sticky; top:0; background:#f5f7fb; font-weight:700; }
     .raw-data .raw-table td.raw-num { text-align:right; font-variant-numeric:tabular-nums; }
+    .raw-data .raw-pager { display:flex; align-items:center; gap:10px; margin:0 0 6px; flex-wrap:wrap; }
+    .raw-data .raw-page-btn { background:#fff; border:1px solid #cbd5e1; border-radius:8px;
+      padding:4px 12px; font-size:14px; cursor:pointer; }
+    .raw-data .raw-page-btn:hover:not(:disabled) { background:#eef2ff; }
+    .raw-data .raw-page-btn:disabled { color:#bbb; cursor:default; }
+    .raw-data .raw-page-label { color:#555; font-size:14px; }
   `;
   document.head.append(s);
 }

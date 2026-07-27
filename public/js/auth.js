@@ -46,15 +46,33 @@ export async function join(joinCode, groupNo) {
 
   // 입장 절차 (SPEC v1.7 §5.3): classes 전체를 검색하지 않고
   // joinCodes/{입력한 코드} 문서 하나만 집어 읽는다 (보안 규칙이 list를 막는다)
-  const codeSnap = await fsMod.getDoc(fsMod.doc(db, "joinCodes", joinCode));
-  if (!codeSnap.exists()) throw new Error("학급 코드를 찾을 수 없어요. 선생님께 다시 확인해 주세요.");
+  const found = await findJoinCode(fsMod, db, joinCode);
+  if (!found) throw new Error("학급 코드를 찾을 수 없어요. 선생님께 다시 확인해 주세요.");
 
-  const classId = codeSnap.data().classId;
+  const classId = found.snap.data().classId;
   const classSnap = await fsMod.getDoc(fsMod.doc(db, "classes", classId));
   if (!classSnap.exists()) throw new Error("학급 정보가 없어요. 선생님께 알려 주세요.");
 
-  store(classId, classSnap.data().name || "", joinCode, groupNo);
+  // 학생이 친 글자가 아니라 실제로 찾은 코드를 저장한다.
+  // 수집기와 교사 화면이 같은 코드 문자열을 보게 하려는 것이다.
+  store(classId, classSnap.data().name || "", found.code, groupNo);
   return getSession();
+}
+
+// 학급 코드 문서를 찾는다. 대소문자만 다르게 적은 경우도 찾아 준다.
+// 태블릿 자판이 소문자로 바꿔 치거나 손으로 옮겨 적다가 대소문자가 달라져도
+// 입장이 되도록, 적은 그대로 → 대문자 → 소문자 순으로 찾아본다.
+// (코드를 만드는 쪽이 대소문자를 그대로 저장하므로 한쪽으로 통일하면 옛 학급이 막힌다)
+async function findJoinCode(fsMod, db, code) {
+  if (code.includes("/")) return null; // 문서 이름에 못 쓰는 글자 — 없는 코드로 본다
+  const tried = [];
+  for (const c of [code, code.toUpperCase(), code.toLowerCase()]) {
+    if (tried.includes(c)) continue;
+    tried.push(c);
+    const snap = await fsMod.getDoc(fsMod.doc(db, "joinCodes", c));
+    if (snap.exists()) return { snap, code: c };
+  }
+  return null;
 }
 
 // 로그인(익명)을 보장하고 uid를 돌려준다. 데이터 저장 전에 호출한다.
