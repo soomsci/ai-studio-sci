@@ -5,8 +5,10 @@
 .firebase/
 
 # Firebase 실제 설정값 — 커밋 금지 (CLAUDE.md 절대 규칙 7)
-# 본보기는 public/js/firebase-config.example.js
-public/js/firebase-config.js
+# 파일 이름을 콕 집으면 firebase-config.js.bak 같은 사본이 빠져나간다.
+# 사본까지 덮도록 * 로 막고, 커밋해야 하는 본보기 파일만 ! 로 되살린다.
+public/js/firebase-config*
+!public/js/firebase-config.example.js
 
 # 관리자 열쇠(서비스 계정 키) — 절대 커밋 금지 (수집기가 쓸 예정, 세션 F)
 serviceAccount*.json
