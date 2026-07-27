@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import sys
 from dataclasses import dataclass, field
@@ -113,6 +114,9 @@ def validate(ds: Dataset) -> None:
         raise SchemaError(f"expNo는 {'|'.join(map(str, VALID_EXP_NO))}만 허용합니다: {ds.exp_no}")
     if ds.source not in VALID_SOURCE:
         raise SchemaError(f"source는 sensor|manual|mock만 허용합니다: {ds.source}")
+    if not isinstance(ds.interval_sec, (int, float)) or isinstance(ds.interval_sec, bool) \
+            or not math.isfinite(ds.interval_sec) or ds.interval_sec <= 0:
+        raise SchemaError("interval_sec은 0보다 큰 숫자여야 합니다")
     for name in ("class_id", "group_id", "owner_uid", "title", "condition", "sensor", "unit"):
         if not getattr(ds, name):
             raise SchemaError(f"{name}은(는) 비어 있을 수 없습니다")
@@ -131,16 +135,28 @@ def validate(ds: Dataset) -> None:
             f"[경고] points가 {len(ds.points)}개로 정상 범위(약 {WARN_POINTS}개)를 "
             "넘었습니다. 측정 간격을 늘리는 것을 고려하세요(§5.2)."
         )
+    previous_t = -math.inf
     for p in ds.points:
-        if "t" not in p or "v" not in p:
+        if not isinstance(p, dict) or "t" not in p or "v" not in p:
             raise SchemaError(f"points 원소는 t·v 필드가 모두 있어야 합니다: {p}")
+        if any(
+            not isinstance(p[name], (int, float))
+            or isinstance(p[name], bool)
+            or not math.isfinite(p[name])
+            for name in ("t", "v")
+        ):
+            raise SchemaError(f"points의 t·v는 유한한 숫자여야 합니다: {p}")
+        if p["t"] < 0 or p["t"] < previous_t:
+            raise SchemaError("points의 t(경과 초)는 음수가 아니고 앞에서부터 증가해야 합니다")
+        previous_t = p["t"]
     for e in ds.events:
-        if "t" not in e or "label" not in e:
+        if not isinstance(e, dict) or "t" not in e or "label" not in e:
             raise SchemaError(f"events 원소는 t·label 필드가 모두 있어야 합니다: {e}")
-
-    # §5.2 — t는 측정 시작으로부터 경과 초(절대 시각 아님). 음수·역행 여부만 가볍게 확인한다.
-    if any(p["t"] < 0 for p in ds.points):
-        raise SchemaError("points의 t(경과 초)에 음수가 있습니다")
+        if not isinstance(e["t"], (int, float)) or isinstance(e["t"], bool) \
+                or not math.isfinite(e["t"]) or e["t"] < 0:
+            raise SchemaError(f"events의 t는 0 이상의 유한한 숫자여야 합니다: {e}")
+        if not isinstance(e["label"], str) or not e["label"].strip():
+            raise SchemaError(f"events의 label은 비어 있지 않은 문자열이어야 합니다: {e}")
 
     size = len(json.dumps(_dataset_payload(ds, datetime.now(timezone.utc)), default=str).encode("utf-8"))
     if size > MAX_DOC_BYTES:

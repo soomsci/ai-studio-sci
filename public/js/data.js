@@ -12,8 +12,28 @@ import { getSession, ensureAuth } from "./auth.js";
 // "firebase" 또는 "mock" — 화면에서 연습 모드 안내를 띄울 때 쓴다
 export const MODE = isConfigured ? "firebase" : "mock";
 
-// 측정 1회의 점 개수가 이 값을 넘으면 경고한다 (문서 1MB 제한, SPEC §5.2)
+// 측정 1회의 점 개수 상한 (문서 1MB 제한, SPEC §5.2)
 export const MAX_POINTS = 5000;
+
+export function validateDatasetPoints(points) {
+  if (!Array.isArray(points) || points.length === 0) {
+    throw new Error("측정값이 하나도 없어요. 값을 한 번 이상 잰 뒤 저장해 주세요.");
+  }
+  if (points.length > MAX_POINTS) {
+    throw new Error(`측정값이 ${MAX_POINTS}개를 넘었어요. 측정을 나누거나 간격을 늘려 주세요.`);
+  }
+  let previousT = -Infinity;
+  for (const point of points) {
+    if (!point || typeof point !== "object"
+        || !Number.isFinite(point.t) || !Number.isFinite(point.v)) {
+      throw new Error("측정값의 시간과 값은 숫자여야 해요.");
+    }
+    if (point.t < 0 || point.t < previousT) {
+      throw new Error("측정 시간이 올바른 순서가 아니에요.");
+    }
+    previousT = point.t;
+  }
+}
 
 // ── 연습 모드 저장소 ─────────────────────────────────────
 const memory = { datasets: [], analyses: new Map() };
@@ -94,12 +114,7 @@ export async function listClassDatasets(expNo) {
 
 // 측정 1회 저장 → 새 문서 아이디를 돌려준다
 export async function saveDataset(dataset) {
-  if (!Array.isArray(dataset.points) || dataset.points.length === 0) {
-    throw new Error("측정값이 하나도 없어요. 값을 한 번 이상 잰 뒤 저장해 주세요.");
-  }
-  if (dataset.points?.length > MAX_POINTS) {
-    console.warn(`측정 점이 ${dataset.points.length}개입니다. ${MAX_POINTS}개를 넘으면 저장이 실패할 수 있어요.`);
-  }
+  validateDatasetPoints(dataset.points);
   const session = getSession();
   const uid = await ensureAuth();
   const doc = {
