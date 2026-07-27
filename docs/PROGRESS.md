@@ -20,6 +20,24 @@
 - 🔴 **이것은 윈도우 `.exe`가 아니다.** PyInstaller는 **크로스 빌드를 못 한다** — 맥에서 만들면 맥 실행 파일만 나온다. **수업용 윈도우 노트북에서 `pyinstaller build.spec`을 직접 돌려야** `.exe`가 나온다. 그때 **파이썬 3.11**을 쓴다(`build.spec` 주의사항, pasco 요구사항). 맥 빌드는 3.12로도 됐다.
 - `collector/dist/`는 `.gitignore` 대상이라 GitHub에는 안 올라간다(17MB 바이너리를 git에 넣지 않는다). **iCloud 폴더라 기기 간 동기화는 된다.**
 
+**윈도우 exe 만들기 — 절차 (2026-07-27 확정, 사용자가 윈도우 노트북에서 직접)**
+
+PyInstaller는 크로스 빌드를 못 하므로 **윈도우에서 빌드해야 `.exe`가 나온다.** 어차피 윈도우 실물 확인이 개학 전 필수라 한자리에서 끝내는 것이 낫다(GitHub Actions 자동 빌드는 검토했으나 사용자가 직접 빌드를 택함).
+
+1. **파이썬 3.11 설치** — python.org에서 3.11.x. 설치 화면 맨 아래 **"Add python.exe to PATH" 체크**(안 하면 `python`이 안 먹힌다). 3.12는 pasco 요구사항 밖이라 피한다.
+2. **프로젝트 파일 옮기기** — iCloud Drive(윈도우용) 동기화가 가장 쉽다. `git clone`도 되지만 그 경우 **`collector/firebase-config.json`이 따라오지 않는다**(gitignore 대상). 없으면 손으로 만들어야 한다 — `firebase-config.example.json`을 복사해 `apiKey`·`projectId`를 채운다.
+3. **명령 프롬프트에서**:
+   ```
+   cd collector
+   pip install -r requirements.txt
+   pip install pyinstaller
+   pyinstaller build.spec
+   ```
+   → `collector\dist\과학데이터스튜디오_수집기.exe`
+4. **확인** — exe를 두 번 눌러 → 브라우저에서 `http://127.0.0.1:5050` 열림 → 학급 코드 `TEST` 입력 → 학급 이름이 뜨면 성공. 이어서 온도 센서 연결까지 해 보면 윈도우 블루투스 경로까지 검증된다.
+
+⚠️ **미리 알아 둘 것 — 윈도우가 exe 실행을 막을 수 있다.** 서명 없는 실행 파일이라 처음 실행 시 **"Windows의 PC 보호"** 파란 창이 뜬다. **[추가 정보] → [실행]**을 눌러야 열린다. 모둠 노트북 6대에서 학생이 각자 겪게 되므로, **수업 전에 교사가 한 번씩 눌러 두거나** 학생에게 미리 알려 줘야 한다. 백신이 삭제해 버리는 경우도 있어 개학 전 실제 확인이 필요하다.
+
 **사용자만 할 수 있는 것 (하드웨어·환경)**
 - 🔥 온도 센서 2대로 비열 실물 측정 한 번 (업로드 쓰기 경로가 아직 미검증)
 - 💻 윈도우 노트북 접속 확인 + exe 빌드
