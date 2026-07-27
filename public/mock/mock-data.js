@@ -115,14 +115,17 @@ function mockExp3(condition) {
   const points = [];
   const base = 70 + noise(5); // 사람마다 다른 안정 시 심박수
 
+  // 회복 속도 tau도 사람마다 다르게 잡는다. 고정값으로 두면 연습 데이터를
+  // 여러 개 만들어도 회복 속도가 다 같아서, 실험 3 주제②("회복 속도의 개인차")로
+  // 관찰할 차이가 남지 않는다. 실제로도 체력에 따라 회복 속도가 갈린다.
   let start, tau;
   if (condition === "안정 시") {
     start = base; tau = 1; // 변화 없음
   } else if (condition === "가벼운 운동 후") {
-    start = 115 + noise(10); tau = 80;
+    start = 115 + noise(10); tau = 80 + noise(25);   // 대략 55~105초
   } else {
     // "심한 운동 후"와 "회복 ○분"은 모두 높은 값에서 회복하는 곡선
-    start = 158 + noise(12); tau = 140;
+    start = 158 + noise(12); tau = 140 + noise(40);  // 대략 100~180초
   }
   for (let t = 0; t <= durationSec; t += intervalSec) {
     points.push({ t, v: round1(approach(start, base + 2, t, tau) + noise(2)) });
