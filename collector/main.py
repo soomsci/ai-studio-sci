@@ -58,6 +58,9 @@ class _Channel:
             "latestValue": display[-1]["v"] if display else None,
             "points": display,  # 화면의 실시간 그래프가 채널별로 선을 그리는 데 쓴다
             "nearLimit": len(committed) >= NEAR_LIMIT_POINTS,
+            "connected": bool(getattr(self.source, "is_connected", lambda: True)()),
+            "measuring": bool(getattr(self.source, "is_measuring", lambda: False)()),
+            "error": getattr(self.source, "last_error", None),
         }
 
 
@@ -75,7 +78,7 @@ class _Session:
         self.manual_sensor_name: str | None = None
         self.meta: dict = {}  # 학급·모둠·실험번호·조건·측정 간격 — 채널이 공유한다
         self.started_at: datetime | None = None
-        self.status = "idle"  # idle | measuring | stopped | uploaded
+        self.status = "idle"  # idle | measuring | stopped | uploaded | error
         self.uploaded = False
 
     def has_data(self) -> bool:
@@ -198,6 +201,8 @@ def api_add_channel():
             return jsonify(ok=False, error="먼저 1단계에서 실시간 측정을 선택하세요"), 400
         if SESSION.status == "measuring":
             return jsonify(ok=False, error="측정 중에는 센서를 추가할 수 없습니다"), 409
+        if SESSION.status == "error":
+            return jsonify(ok=False, error="오류가 난 센서 연결을 먼저 해제해 주세요"), 409
         if any(ch.device_id == device_id for ch in SESSION.channels):
             return jsonify(ok=False, error=f"센서 {device_id}는 이미 추가했습니다"), 400
 
@@ -223,6 +228,11 @@ def api_start():
     with LOCK:
         if SESSION.status == "measuring":
             return jsonify(ok=False, error="이미 측정 중입니다"), 409
+        if SESSION.status == "error":
+            return jsonify(
+                ok=False,
+                error="센서 연결 오류가 있어 다시 시작할 수 없어요. 연결을 해제하고 다시 검색해 주세요.",
+            ), 409
 
         restart_mode = data.get("restartMode")
         if (
@@ -335,10 +345,24 @@ def api_csv_upload():
 def api_status():
     with LOCK:
         if SESSION.mode == "realtime":
+            fatal_error = next(
+                (getattr(ch.source, "fatal_error", None) for ch in SESSION.channels
+                 if getattr(ch.source, "fatal_error", None)),
+                None,
+            )
+            if SESSION.status == "measuring" and fatal_error:
+                # 한 채널이 끊기면 비교 시각이 어긋나므로 다른 채널도 함께 멈춘다.
+                for channel in SESSION.channels:
+                    try:
+                        channel.source.stop()
+                    except sensor.SensorConnectionError:
+                        pass
+                SESSION.status = "error"
             channels = [ch.to_dict() for ch in SESSION.channels]
             return jsonify(
                 ok=True, status=SESSION.status, channels=channels,
                 hasData=SESSION.has_data(), uploaded=SESSION.uploaded,
+                error=fatal_error,
             )
         points = SESSION.manual_source.latest_points() if SESSION.manual_source else []
         return jsonify(
@@ -356,7 +380,16 @@ def api_stop():
         if SESSION.mode == "realtime":
             if not SESSION.channels:
                 return jsonify(ok=False, error="측정 중이 아닙니다"), 400
-            counts = [len(ch.source.stop()[0]) for ch in SESSION.channels]
+            counts = []
+            errors = []
+            for channel in SESSION.channels:
+                try:
+                    counts.append(len(channel.source.stop()[0]))
+                except sensor.SensorConnectionError as exc:
+                    errors.append(str(exc))
+            if errors:
+                SESSION.status = "error"
+                return jsonify(ok=False, error=errors[0], counts=counts), 500
             SESSION.status = "stopped"
             return jsonify(ok=True, counts=counts, hasData=SESSION.has_data())
         if SESSION.manual_source is None:
@@ -364,6 +397,31 @@ def api_stop():
         points, _events = SESSION.manual_source.stop()
         SESSION.status = "stopped"
     return jsonify(ok=True, count=len(points), hasData=bool(points))
+
+
+@app.route("/api/disconnect", methods=["POST"])
+def api_disconnect():
+    """측정과 BLE 연결을 완전히 끝내고 1단계로 돌아간다.
+
+    아직 보내지 않은 값이 있으면 화면에서 한 번 더 확인받는다. 측정 중에는 먼저
+    종료하게 해 마지막 버킷을 저장하고, 오류 상태에서는 강제 확인 뒤 정리할 수 있다.
+    """
+    data = request.get_json(silent=True) or {}
+    force = bool(data.get("force"))
+    with LOCK:
+        if SESSION.status == "measuring":
+            return jsonify(ok=False, error="측정을 먼저 종료해 주세요."), 409
+        if SESSION.has_data() and not SESSION.uploaded and not force:
+            return jsonify(
+                ok=False,
+                error="아직 서버로 보내지 않은 측정값이 있어요.",
+                needsDisconnectConfirm=True,
+            ), 409
+        try:
+            SESSION.reset()
+        except sensor.SensorConnectionError as exc:
+            return jsonify(ok=False, error=str(exc)), 500
+    return jsonify(ok=True)
 
 
 def _build_dataset(meta: dict, title: str, sensor_name: str, unit: str,

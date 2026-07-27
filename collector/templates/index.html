@@ -144,6 +144,7 @@
   <div class="row">
     <button id="btnStart" disabled>모든 센서 측정 시작</button>
     <button id="btnStop" disabled>측정 종료</button>
+    <button id="btnDisconnect" type="button" disabled>센서 연결 해제</button>
   </div>
   <div id="restartChoice" class="choice-box" hidden>
     <p><strong>다음 측정을 어떻게 할까요?</strong></p>
@@ -153,6 +154,14 @@
       <button id="btnNewMeasurement" type="button">새로 재기</button>
     </div>
     <button id="btnCancelRestart" type="button">취소</button>
+  </div>
+  <div id="disconnectChoice" class="choice-box" hidden>
+    <p><strong>센서 연결을 해제할까요?</strong></p>
+    <p class="hint">아직 서버로 보내지 않은 측정값이 지워져요. 필요한 값이면 먼저 서버로 보내 주세요.</p>
+    <div class="row">
+      <button id="btnConfirmDisconnect" type="button">값을 지우고 연결 해제</button>
+      <button id="btnCancelDisconnect" type="button">취소</button>
+    </div>
   </div>
   <p id="measureStatus" class="hint" hidden><span class="dot"></span>측정 중</p>
   <p id="pointsWarning" class="hint" style="color:#b00" hidden>곧 저장 한도에 닿아요. 측정을 마치고 서버로 보내 주세요.</p>
@@ -353,6 +362,37 @@ $("btnStop").addEventListener("click", async () => {
   measurementUploaded = false;
   setMeasurementControls("stopped");
   showMsg("측정을 멈췄어요. 서버로 보내거나 측정 시작을 눌러 다시 잴 수 있어요.");
+});
+
+async function disconnectSensors(force = false) {
+  const result = await withBusy(
+    $("btnDisconnect"),
+    "연결 해제 중…",
+    () => postJson("/api/disconnect", { force })
+  );
+  if (!result.ok) {
+    if (result.needsDisconnectConfirm) {
+      $("disconnectChoice").hidden = false;
+    } else {
+      showMsg(result.error, true);
+    }
+    return;
+  }
+  $("disconnectChoice").hidden = true;
+  $("restartChoice").hidden = true;
+  $("channels").hidden = true;
+  $("upload").hidden = true;
+  mode = null;
+  stoppedHasData = false;
+  measurementUploaded = false;
+  clearMeasurementView();
+  showMsg("센서 연결을 해제했어요. 다시 쓰려면 1단계부터 시작해 주세요.");
+}
+
+$("btnDisconnect").addEventListener("click", () => disconnectSensors(false));
+$("btnConfirmDisconnect").addEventListener("click", () => disconnectSensors(true));
+$("btnCancelDisconnect").addEventListener("click", () => {
+  $("disconnectChoice").hidden = true;
 });
 
 $("btnEvent").addEventListener("click", async () => {

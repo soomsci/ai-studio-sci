@@ -46,6 +46,9 @@ class SensorConnectionError(RuntimeError):
     pass
 
 
+_event_loop_state = threading.local()
+
+
 def _ensure_event_loop() -> None:
     """pasco.pasco_ble_device를 맨 처음 import할 때 클래스 안에서 nest_asyncio.apply()가
     실행되는데, 이건 현재 스레드에 asyncio 이벤트 루프가 있어야 한다. main.py는 Flask
@@ -56,9 +59,16 @@ def _ensure_event_loop() -> None:
     import asyncio
 
     try:
-        asyncio.get_event_loop()
+        asyncio.get_running_loop()
+        return
     except RuntimeError:
-        asyncio.set_event_loop(asyncio.new_event_loop())
+        pass
+
+    loop = getattr(_event_loop_state, "loop", None)
+    if loop is None or loop.is_closed():
+        loop = asyncio.new_event_loop()
+        _event_loop_state.loop = loop
+    asyncio.set_event_loop(loop)
 
 
 def _device_id_from_name(name: str | None) -> str | None:
@@ -80,6 +90,7 @@ def _device_id_from_name(name: str | None) -> str | None:
 # 실물 센서로 확인한 지연의 원인. 캐시가 없거나 오래돼서 비어 있으면
 # connect_by_id()로 그대로 폴백한다.
 _scan_cache: dict[str, object] = {}
+MAX_CONSECUTIVE_READ_ERRORS = 5
 
 
 def scan_sensors(sensor_name: str) -> list[dict]:
@@ -104,6 +115,10 @@ def scan_sensors(sensor_name: str) -> list[dict]:
     device = PASCOBLEDevice()
     try:
         found = device.scan(sensor_name)
+        # 전원을 막 켠 직후 첫 검색이 비어 있는 경우가 실물 테스트에서 한 번 있었다.
+        # 빈 결과일 때만 한 번 더 검색해 학생이 이유 없이 검색 버튼을 반복하지 않게 한다.
+        if not found:
+            found = device.scan(sensor_name)
     except device.BLEScanFailed as exc:
         raise SensorConnectionError(f"{sensor_name} 센서 검색 실패: {exc}") from exc
 
@@ -143,6 +158,8 @@ class PascoSensorSource:
         self._start_time: float | None = None
         self._stop_flag = threading.Event()
         self._thread: threading.Thread | None = None
+        self._last_error: str | None = None
+        self._fatal_error: str | None = None
 
     def connect(self, device_id: str) -> None:
         """센서 번호(예: "117-880", 센서 몸통에 인쇄된 번호)로 정확히 지정해 연결한다.
@@ -164,10 +181,24 @@ class PascoSensorSource:
         from pasco.pasco_ble_device import PASCOBLEDevice
 
         self._device = PASCOBLEDevice()
-        cached_ble_device = _scan_cache.get(device_id)
+        # 검색 결과 객체는 한 번만 쓴다. 오래된 객체를 계속 재사용하지 않고,
+        # 캐시 연결이 실패하면 번호 지정 검색으로 한 번 폴백한다.
+        cached_ble_device = _scan_cache.pop(device_id, None)
         try:
             if cached_ble_device is not None:
-                self._device.connect(cached_ble_device)
+                try:
+                    self._device.connect(cached_ble_device)
+                except (
+                    self._device.BLEConnectionError,
+                    self._device.BLEScanFailed,
+                    self._device.SensorNotFound,
+                ):
+                    try:
+                        self._device.disconnect()
+                    except Exception:
+                        pass
+                    self._device = PASCOBLEDevice()
+                    self._device.connect_by_id(device_id)
             else:
                 self._device.connect_by_id(device_id)
         except (self._device.BLEConnectionError, self._device.BLEScanFailed, self._device.SensorNotFound) as exc:
@@ -182,9 +213,22 @@ class PascoSensorSource:
                 f"입력한 번호({device_id})와 실제 연결된 센서 번호({actual_id})가 다릅니다"
             )
         self.device_id = actual_id or device_id
+        self._last_error = None
+        self._fatal_error = None
 
     def is_connected(self) -> bool:
         return bool(self._device and self._device.is_connected())
+
+    def is_measuring(self) -> bool:
+        return bool(self._thread and self._thread.is_alive())
+
+    @property
+    def last_error(self) -> str | None:
+        return self._fatal_error or self._last_error
+
+    @property
+    def fatal_error(self) -> str | None:
+        return self._fatal_error
 
     def start(self, interval_sec: float, keep_existing: bool = False) -> None:
         """폴링 스레드를 시작한다. pasco의 read_data()는 문서상 동기(블로킹) 호출이라
@@ -200,6 +244,8 @@ class PascoSensorSource:
             self._points = []
             self._events = []
         self._bucket = []
+        self._last_error = None
+        self._fatal_error = None
         last_t = self._points[-1]["t"] if keep_existing and self._points else 0
         self._start_time = time.monotonic() - last_t
         self._stop_flag.clear()
@@ -215,6 +261,7 @@ class PascoSensorSource:
         찰 때마다 그 사이 값의 평균 1점만 _points(=업로드될 데이터)에 남긴다.
         이러면 §5.2의 점 개수 한도를 그대로 지키면서도 그래프는 부드럽게 흐른다."""
         next_flush = time.monotonic() + interval_sec
+        consecutive_errors = 0
         while not self._stop_flag.is_set():
             try:
                 value = self._device.read_data(self.measurement)  # ⚠ 센서 입수 후 테스트 필요
@@ -223,11 +270,31 @@ class PascoSensorSource:
                 self._device.MeasurementNotFound,
                 self._device.DeviceNotConnected,
             ) as exc:
-                print(f"[sensor.py] 측정값 읽기 실패, 다음 주기에 재시도: {exc}")
+                consecutive_errors += 1
+                self._last_error = (
+                    f"센서 값을 읽지 못해 다시 시도하고 있어요 "
+                    f"({consecutive_errors}/{MAX_CONSECUTIVE_READ_ERRORS})."
+                )
+                print(f"[sensor.py] {self._last_error} 원래 메시지: {exc}")
+                if consecutive_errors >= MAX_CONSECUTIVE_READ_ERRORS:
+                    self._fatal_error = (
+                        "센서 연결이 끊어졌어요. 센서 연결을 해제하고 다시 검색해 주세요."
+                    )
+                    self._stop_flag.set()
+                    break
                 self._stop_flag.wait(interval_sec)
                 next_flush = time.monotonic() + interval_sec
                 continue
+            except Exception as exc:
+                self._fatal_error = (
+                    "센서에서 예상하지 못한 오류가 났어요. 연결을 해제하고 다시 검색해 주세요."
+                )
+                print(f"[sensor.py] {self._fatal_error} 원래 메시지: {exc}")
+                self._stop_flag.set()
+                break
 
+            consecutive_errors = 0
+            self._last_error = None
             elapsed = time.monotonic() - self._start_time
             self._bucket.append((elapsed, value))
 
@@ -271,9 +338,13 @@ class PascoSensorSource:
         """측정만 멈춘다. 연결은 다음 측정을 위해 유지한다."""
         self._stop_flag.set()
         if self._thread:
-            self._thread.join(timeout=5)
+            thread = self._thread
+            thread.join(timeout=5)
+            if thread.is_alive():
+                self._fatal_error = "센서 응답이 멈춰 측정을 끝내지 못했어요. 연결을 해제해 주세요."
+                raise SensorConnectionError(self._fatal_error)
             self._thread = None
-        return self._points, self._events
+        return list(self._points), list(self._events)
 
     def disconnect(self) -> None:
         """사용을 완전히 끝낼 때 센서 연결을 해제한다."""

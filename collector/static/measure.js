@@ -10,11 +10,13 @@ let currentChannelCount = 0;
 function setMeasurementControls(status) {
   currentMeasurementStatus = status;
   const measuring = status === "measuring";
-  document.getElementById("btnStart").disabled = measuring || currentChannelCount === 0;
+  const errored = status === "error";
+  document.getElementById("btnStart").disabled = measuring || errored || currentChannelCount === 0;
   document.getElementById("btnStop").disabled = !measuring;
   document.getElementById("btnEvent").disabled = !measuring;
-  document.getElementById("btnScan").disabled = measuring;
-  document.getElementById("btnAddChannel").disabled = measuring;
+  document.getElementById("btnScan").disabled = measuring || errored;
+  document.getElementById("btnAddChannel").disabled = measuring || errored;
+  document.getElementById("btnDisconnect").disabled = measuring || currentChannelCount === 0;
   document.getElementById("measureStatus").hidden = !measuring;
 }
 
@@ -28,6 +30,13 @@ function renderChannels(channels, status = currentMeasurementStatus) {
     li.innerHTML = `<span class="num">${ch.deviceId}</span>${ch.label} — ${ch.title}` +
       `<span class="count">${ch.count}개 모음</span>` +
       `<span class="val">${value}</span>`;
+    if (ch.error) {
+      const error = document.createElement("span");
+      error.className = "count";
+      error.style.color = "#b00";
+      error.textContent = ch.error;
+      li.appendChild(error);
+    }
     list.appendChild(li);
   });
   setMeasurementControls(status);
@@ -44,9 +53,20 @@ function pollStatus() {
     const data = await res.json();
     if (data.ok && data.channels) {
       renderChannels(data.channels, data.status);
+      if (data.error) {
+        showMsg(`${data.error} 지금까지 모은 값은 서버로 보내거나 연결 해제할 수 있어요.`, true);
+      }
       if (data.status !== "measuring") {
         clearInterval(pollTimer);
       }
     }
   }, 800);
+}
+
+function clearMeasurementView() {
+  if (pollTimer) {
+    clearInterval(pollTimer);
+    pollTimer = null;
+  }
+  renderChannels([], "idle");
 }

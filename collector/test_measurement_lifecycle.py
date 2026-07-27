@@ -17,6 +17,8 @@ class FakeSource:
         self.started_with = []
         self.running = False
         self.disconnected = False
+        self.last_error = None
+        self.fatal_error = None
 
     def start(self, _interval: float, keep_existing: bool = False) -> None:
         if self.running:
@@ -36,6 +38,12 @@ class FakeSource:
     def disconnect(self) -> None:
         self.running = False
         self.disconnected = True
+
+    def is_connected(self) -> bool:
+        return not self.disconnected
+
+    def is_measuring(self) -> bool:
+        return self.running
 
     def latest_points(self):
         return list(self.points)
@@ -109,6 +117,36 @@ class MeasurementLifecycleTest(unittest.TestCase):
         self.assertEqual(response.status_code, 409)
         self.assertIn("새로 재기", response.get_json()["error"])
 
+    def test_disconnect_requires_confirmation_for_unsent_data(self) -> None:
+        self.source.points = [{"t": 1, "v": 20}]
+        main.SESSION.status = "stopped"
+
+        choice = self.client.post("/api/disconnect", json={})
+        self.assertEqual(choice.status_code, 409)
+        self.assertTrue(choice.get_json()["needsDisconnectConfirm"])
+        self.assertFalse(self.source.disconnected)
+
+        done = self.client.post("/api/disconnect", json={"force": True})
+        self.assertEqual(done.status_code, 200)
+        self.assertTrue(self.source.disconnected)
+        self.assertIsNone(main.SESSION.mode)
+
+    def test_fatal_channel_error_stops_session_and_requires_reconnect(self) -> None:
+        self.source.running = True
+        self.source.fatal_error = "센서 연결이 끊어졌어요."
+        self.source.last_error = self.source.fatal_error
+        main.SESSION.status = "measuring"
+
+        status = self.client.get("/api/status")
+        self.assertEqual(status.status_code, 200)
+        self.assertEqual(status.get_json()["status"], "error")
+        self.assertEqual(status.get_json()["error"], self.source.fatal_error)
+        self.assertFalse(self.source.running)
+
+        restart = self.client.post("/api/start", json={"restartMode": "continue"})
+        self.assertEqual(restart.status_code, 409)
+        self.assertIn("연결을 해제", restart.get_json()["error"])
+
     def test_stop_does_not_disconnect_real_sensor_source(self) -> None:
         class FakeDevice:
             def __init__(self) -> None:
@@ -130,6 +168,35 @@ class MeasurementLifecycleTest(unittest.TestCase):
         source.disconnect()
         self.assertEqual(device.disconnect_count, 1)
         self.assertIsNone(source._device)
+
+    def test_repeated_read_errors_become_visible_fatal_error(self) -> None:
+        class FakeDevice:
+            class CommunicationError(Exception):
+                pass
+
+            class MeasurementNotFound(Exception):
+                pass
+
+            class DeviceNotConnected(Exception):
+                pass
+
+            def is_connected(self) -> bool:
+                return True
+
+            def read_data(self, _measurement):
+                raise self.DeviceNotConnected("연결 없음")
+
+            def disconnect(self) -> None:
+                pass
+
+        source = main.sensor.PascoSensorSource("Temperature")
+        source._device = FakeDevice()
+        source.start(0.001)
+        source._thread.join(timeout=1)
+
+        self.assertFalse(source.is_measuring())
+        self.assertIn("연결이 끊어졌", source.fatal_error)
+        source.disconnect()
 
 
 if __name__ == "__main__":
