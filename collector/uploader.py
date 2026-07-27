@@ -236,23 +236,40 @@ def lookup_class_by_join_code(id_token: str, project_id: str, join_code: str) ->
     Firestore는 없는 학급 밑에도 조용히 문서를 만들어 버리므로(§5.2 v2.2),
     측정을 시작하기 전에 여기서 미리 확인해야 한다.
 
+    대소문자만 다르게 적은 경우도 찾아 준다(BUG-04). 태블릿 자판이 소문자로
+    바꿔 치거나 손으로 옮겨 적다가 대소문자가 달라져도 입장이 되도록, 적은
+    그대로 → 대문자 → 소문자 순으로 찾아본다(js/auth.js의 findJoinCode()와
+    같은 순서 — 코드를 만드는 쪽이 대소문자를 그대로 저장하므로 한쪽으로
+    통일하면 옛 학급이 막힌다).
+
     반환: {"classId": ..., "className": ...}. 코드가 없으면 UploadError.
     """
     requests = _requests_module()
     base = f"https://firestore.googleapis.com/v1/projects/{quote(project_id, safe='')}/databases/(default)/documents"
     headers = {"Authorization": f"Bearer {id_token}"}
 
-    try:
-        res = requests.get(f"{base}/joinCodes/{quote(join_code, safe='')}", headers=headers, timeout=15)
-    except requests.RequestException as exc:
-        raise UploadError(f"서버에 연결하지 못했습니다. 인터넷 연결을 확인하세요. ({exc})") from exc
+    tried: list[str] = []
+    join_doc = None
+    for code in (join_code, join_code.upper(), join_code.lower()):
+        if "/" in code or code in tried:
+            continue
+        tried.append(code)
+        try:
+            res = requests.get(f"{base}/joinCodes/{quote(code, safe='')}", headers=headers, timeout=15)
+        except requests.RequestException as exc:
+            raise UploadError(f"서버에 연결하지 못했습니다. 인터넷 연결을 확인하세요. ({exc})") from exc
 
-    if res.status_code == 404:
+        if res.status_code == 404:
+            continue
+        if res.status_code != 200:
+            raise UploadError(_friendly_write_error(res))
+        join_doc = res
+        break
+
+    if join_doc is None:
         raise UploadError("그런 학급 코드가 없어요. 선생님께 다시 확인해 주세요.")
-    if res.status_code != 200:
-        raise UploadError(_friendly_write_error(res))
 
-    class_id = res.json().get("fields", {}).get("classId", {}).get("stringValue")
+    class_id = join_doc.json().get("fields", {}).get("classId", {}).get("stringValue")
     if not class_id:
         raise UploadError("학급 코드 정보가 올바르지 않아요. 선생님께 알려 주세요.")
 
