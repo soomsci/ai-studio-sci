@@ -324,6 +324,10 @@ function renderStep3Chart(slotEl) {
   }
   // 자동 계산: 숫자만 보여준다. 해석은 학생 몫 (SPEC §8.4)
   const statsMap = computeConditionStats(picked);
+  if (!statsMap.size) {
+    statsEl.innerHTML = `<p class="exp2-dim">고른 측정에 계산할 값이 없어요.</p>`;
+    return;
+  }
   const head = EXP2.stats.map((s) => `<th>${s.label}</th>`).join("");
   const rows = orderedConditions(statsMap)
     .map((cond) => {
@@ -351,6 +355,12 @@ function drawChart(canvasEl, opts, noteEl) {
 
   if (opts.chartType === "bar") {
     const statsMap = computeConditionStats(picked);
+    if (!statsMap.size) {
+      canvasEl.replaceWith(Object.assign(document.createElement("p"), {
+        className: "exp2-dim", textContent: "고른 측정에 계산할 값이 없어요.",
+      }));
+      return;
+    }
     const order = orderedConditions(statsMap);
     spec.type = "bar";
     spec.xLabel = "조건";
@@ -387,13 +397,17 @@ function drawChart(canvasEl, opts, noteEl) {
 function computeConditionStats(list) {
   const out = new Map();
   for (const [cond, arr] of groupByCondition(list)) {
-    const changes = arr.map(sampleChange);
-    const rates = arr.map(sampleRate);
+    // 예전 수집기에서 생겼을 수 있는 0점 문서는 계산에서 빼되,
+    // 다른 정상 측정은 그대로 분석할 수 있게 한다.
+    const usable = arr.filter((d) => d.points.length > 0);
+    if (!usable.length) continue;
+    const changes = usable.map(sampleChange);
+    const rates = usable.map(sampleRate);
     out.set(cond, {
-      n: arr.length,
+      n: usable.length,
       change: avg(changes),
       rate: avg(rates),
-      spread: arr.length > 1 ? stdev(changes) : null,
+      spread: usable.length > 1 ? stdev(changes) : null,
     });
   }
   return out;

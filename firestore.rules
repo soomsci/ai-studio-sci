@@ -51,10 +51,43 @@ service cloud.firestore {
         && get(/databases/$(database)/documents/classes/$(classId)).data.teacherUid == request.auth.uid;
     }
 
+    // Firestore는 부모 문서가 없어도 하위 컬렉션에 쓸 수 있으므로,
+    // 고아 측정·분석 문서가 생기지 않게 쓰기 때 학급 존재를 확인한다.
+    function classExists(classId) {
+      return exists(/databases/$(database)/documents/classes/$(classId));
+    }
+
     // 측정 문서 쓰기 검증 (§5.2 한도를 규칙으로도 막는다)
     function validDataset() {
-      return request.resource.data.points.size() <= 5000
-        && request.resource.data.expNo in [1, 2, 3, 4]; // 4 = 비열 (v2.0)
+      return request.resource.data.keys().hasAll([
+          'expNo', 'groupId', 'ownerUid', 'title', 'condition', 'sensor', 'unit',
+          'startedAt', 'intervalSec', 'points', 'events', 'source', 'status', 'createdAt'
+        ])
+        && request.resource.data.expNo is int
+        && request.resource.data.expNo in [1, 2, 3, 4] // 4 = 비열 (v2.0)
+        && request.resource.data.groupId is string
+        && request.resource.data.ownerUid is string
+        && request.resource.data.title is string
+        && request.resource.data.condition is string
+        && request.resource.data.sensor is string
+        && request.resource.data.unit is string
+        && request.resource.data.startedAt is timestamp
+        && request.resource.data.intervalSec is number
+        && request.resource.data.intervalSec > 0
+        && request.resource.data.points is list
+        && request.resource.data.points.size() >= 1
+        && request.resource.data.points.size() <= 5000
+        && request.resource.data.events is list
+        && request.resource.data.source in ['sensor', 'manual', 'mock']
+        && request.resource.data.status in ['draft', 'submitted']
+        && request.resource.data.createdAt is timestamp;
+    }
+
+    // 원본 측정값·센서·소유자·시각은 만든 뒤 바꾸지 않는다(절대 규칙 6).
+    // 화면에서 정리할 수 있는 설명용 메타데이터만 수정 가능하게 남긴다.
+    function onlyDatasetMetadataChanged() {
+      return request.resource.data.diff(resource.data).affectedKeys()
+        .hasOnly(['title', 'condition', 'status']);
     }
 
     // 교사 허용 목록은 서버 관리 전용이다. 로그인한 사용자는 자기 등록 여부만 읽는다.
@@ -95,11 +128,15 @@ service cloud.firestore {
         allow read: if signedIn();
         // 만들 때는 자기 uid를 ownerUid로 적어야 하고, 크기 검증을 통과해야 한다
         allow create: if signedIn()
+          && classExists(classId)
           && request.resource.data.ownerUid == request.auth.uid
           && validDataset();
         // 고치는 것도 같은 검증을 거친다 (본인 또는 교사만)
         allow update: if signedIn()
+          && classExists(classId)
           && (resource.data.ownerUid == request.auth.uid || isTeacherOf(classId))
+          && request.resource.data.ownerUid == resource.data.ownerUid
+          && onlyDatasetMetadataChanged()
           && validDataset();
         allow delete: if signedIn()
           && (resource.data.ownerUid == request.auth.uid || isTeacherOf(classId));
@@ -108,7 +145,7 @@ service cloud.firestore {
       match /analyses/{analysisId} {
         allow read: if signedIn();
         // 분석은 모둠이 자유롭게 쓰고 고친다 (ownerUid로 잠그지 않는 이유는 맨 위 주석)
-        allow create, update: if signedIn();
+        allow create, update: if signedIn() && classExists(classId);
         // 삭제는 교사만 (실수로 모둠 분석이 날아가는 것 방지)
         allow delete: if isTeacherOf(classId);
       }
