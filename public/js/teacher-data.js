@@ -10,6 +10,57 @@ import { MODE, listClassDatasets, getAnalysis } from "./data.js";
 
 export const DEFAULT_VISIBLE_EXPS = [1, 2, 3]; // visibleExps 필드가 없는 학급의 기본값 (SPEC §5.2, v2.0)
 
+// 새 입장 코드는 한 형태로만 저장한다. 학생·수집기의 기존 코드 호환 조회는
+// 그대로 두므로, 예전에 소문자·혼합 대소문자로 만든 학급도 계속 들어갈 수 있다.
+export function normalizeJoinCode(value) {
+  return String(value || "").trim().toUpperCase();
+}
+
+function validateJoinCode(joinCode) {
+  if (!joinCode) throw new Error("입장 코드를 입력해 주세요.");
+  if (joinCode.includes("/")) throw new Error("입장 코드에는 /를 쓸 수 없어요.");
+}
+
+async function assertJoinCodeAvailable(f, db, joinCode, oldJoinCode = "", targetClassId = "") {
+  // 새 코드는 대문자로 저장하지만, 예전에 전부 소문자로 저장된 코드와도
+  // 충돌하지 않게 두 형태를 확인한다. 현재 학급의 옛 코드는 검사에서 뺀다.
+  // 부분 실패 뒤 재시도할 때 이미 같은 학급을 가리키는 새 코드는 성공으로 본다.
+  const candidates = [...new Set([joinCode, joinCode.toLowerCase()])]
+    .filter((code) => code !== oldJoinCode);
+  for (const code of candidates) {
+    const snap = await f.getDoc(f.doc(db, "joinCodes", code));
+    if (snap.exists()) {
+      if (targetClassId && snap.data()?.classId === targetClassId) continue;
+      throw new Error("이미 쓰이고 있는 입장 코드예요. 다른 코드를 써 주세요.");
+    }
+  }
+}
+
+async function assertNoOwnedLegacyCollision(f, db, teacherUid, joinCode, currentClassId = "") {
+  // joinCodes는 보안상 list가 막혀 있어 전체 혼합 대소문자 문서를 검색할 수 없다.
+  // 대신 이 교사가 소유한 기존 classes의 joinCode를 비교해 TeSt/TEST 충돌을 잡는다.
+  const q = f.query(f.collection(db, "classes"), f.where("teacherUid", "==", teacherUid));
+  const snap = await f.getDocs(q);
+  const collision = snap.docs.find((docSnap) => (
+    docSnap.id !== currentClassId
+    && normalizeJoinCode(docSnap.data()?.joinCode) === joinCode
+  ));
+  if (collision) {
+    throw new Error("대소문자만 다른 입장 코드를 쓰는 기존 학급이 있어요. 다른 코드를 써 주세요.");
+  }
+}
+
+async function deleteJoinCodeIfOwned(f, db, joinCode, classId) {
+  if (!joinCode) return;
+  const ref = f.doc(db, "joinCodes", joinCode);
+  const snap = await f.getDoc(ref);
+  if (!snap.exists()) return;
+  if (snap.data()?.classId !== classId) {
+    throw new Error(`입장 코드 "${joinCode}"가 다른 학급을 가리켜 자동으로 지우지 않았어요.`);
+  }
+  await f.deleteDoc(ref);
+}
+
 async function fsCtx() {
   const { db, fsMod } = await getFirebase();
   return { db, f: fsMod };
@@ -67,16 +118,16 @@ export async function setVisibleExpsField(classId, exps) {
 // 순서가 중요하다: joinCodes 쓰기 규칙이 classes 문서의 teacherUid를 확인하므로
 // classes를 먼저 만들고, 그다음 joinCodes를 순차로 만든다 (배치로 묶으면 안 됨, SPEC §5.2).
 export async function createClass({ name, joinCode, teacherUid }) {
+  joinCode = normalizeJoinCode(joinCode);
+  validateJoinCode(joinCode);
   if (MODE === "mock") {
     return { id: "mock-class-" + Date.now(), name, joinCode, teacherUid, activeExp: 1, visibleExps: DEFAULT_VISIBLE_EXPS };
   }
   const { db, f } = await fsCtx();
 
   // 입장 코드 중복 확인 — 이미 쓰이는 코드를 덮어쓰면 다른 반 학생이 엉뚱한 학급으로 들어간다
-  const codeSnap = await f.getDoc(f.doc(db, "joinCodes", joinCode));
-  if (codeSnap.exists()) {
-    throw new Error("이미 쓰이고 있는 입장 코드예요. 다른 코드를 써 주세요.");
-  }
+  await assertNoOwnedLegacyCollision(f, db, teacherUid, joinCode);
+  await assertJoinCodeAvailable(f, db, joinCode);
 
   // 1) classes 문서 먼저
   const classRef = await f.addDoc(f.collection(db, "classes"), {
@@ -108,41 +159,44 @@ export async function createClass({ name, joinCode, teacherUid }) {
 // ① 새 코드 중복 확인 → ② classes.joinCode 갱신 → ③ 새 joinCodes 생성 + 옛 joinCodes 삭제.
 // 셋 중 하나라도 실패하면 학생이 입장 못 하는 상태가 남을 수 있어 단계별로 다른 안내를 던진다.
 export async function updateClass(classId, { name, joinCode, oldJoinCode }) {
+  joinCode = normalizeJoinCode(joinCode);
+  validateJoinCode(joinCode);
   if (MODE === "mock") return;
   const { db, f } = await fsCtx();
-  const codeChanged = joinCode && joinCode !== oldJoinCode;
+  const classRef = f.doc(db, "classes", classId);
+  const classSnap = await f.getDoc(classRef);
+  if (!classSnap.exists()) throw new Error("수정할 학급을 찾지 못했어요. 목록을 새로 불러와 주세요.");
+  const current = classSnap.data();
+  const currentJoinCode = current.joinCode || oldJoinCode || "";
 
-  if (codeChanged) {
-    const codeSnap = await f.getDoc(f.doc(db, "joinCodes", joinCode));
-    if (codeSnap.exists()) {
-      throw new Error("이미 쓰이고 있는 입장 코드예요. 다른 코드를 써 주세요.");
-    }
-  }
+  await assertNoOwnedLegacyCollision(f, db, current.teacherUid, joinCode, classId);
+  await assertJoinCodeAvailable(f, db, joinCode, currentJoinCode, classId);
 
-  // ② classes 문서 갱신 (이름 + 코드가 바뀌었으면 코드도 함께)
-  await f.updateDoc(f.doc(db, "classes", classId), {
-    name, ...(codeChanged ? { joinCode } : {}),
-  });
+  // 서버의 현재 상태를 기준으로 항상 같은 결과를 만들게 해 부분 실패 뒤 재시도도 안전하게 한다.
+  await f.updateDoc(classRef, { name, joinCode });
 
-  if (!codeChanged) return;
-
-  // ③-1 새 joinCodes 문서를 만든다
+  // 새 코드가 이미 같은 학급을 가리켜도 setDoc은 같은 값을 다시 써서 성공한다.
   try {
     await f.setDoc(f.doc(db, "joinCodes", joinCode), { classId });
   } catch (err) {
     throw new Error(
-      `반 이름은 저장됐지만 새 입장 코드("${joinCode}") 등록에 실패했어요. ` +
-      `아직 새 코드로는 입장이 안 돼요. 옛 코드("${oldJoinCode}")는 그대로 쓸 수 있어요. 다시 시도해 주세요.`
+      `학급 정보는 저장됐지만 새 입장 코드("${joinCode}") 등록에 실패했어요. ` +
+      "인터넷 연결을 확인한 뒤 같은 내용으로 다시 저장해 주세요."
     );
   }
 
-  // ③-2 옛 joinCodes 문서를 지운다
+  // 화면이 오래된 값을 들고 있거나 앞 시도에서 일부만 성공했을 수 있으므로,
+  // 서버의 이전 코드와 화면이 기억한 옛 코드를 모두 후보로 삼아 같은 학급 것만 지운다.
+  const staleCodes = [...new Set([currentJoinCode, oldJoinCode])]
+    .filter((code) => code && code !== joinCode);
   try {
-    await f.deleteDoc(f.doc(db, "joinCodes", oldJoinCode));
+    for (const staleCode of staleCodes) {
+      await deleteJoinCodeIfOwned(f, db, staleCode, classId);
+    }
   } catch (err) {
     throw new Error(
-      `새 입장 코드("${joinCode}")는 등록됐지만 옛 코드("${oldJoinCode}")를 지우는 데는 실패했어요. ` +
-      `당분간 두 코드 모두 입장이 될 수 있어요. 다시 시도해서 옛 코드를 지워 주세요.`
+      `새 입장 코드("${joinCode}")는 등록됐지만 옛 코드를 정리하지 못했어요. ` +
+      "같은 내용으로 다시 저장하면 정리를 이어서 시도합니다."
     );
   }
 }
@@ -164,6 +218,21 @@ export async function countClassContents(classId) {
 export async function deleteClass(classId, { joinCode }) {
   if (MODE === "mock") return;
   const { db, f } = await fsCtx();
+  const classRef = f.doc(db, "classes", classId);
+  const classSnap = await f.getDoc(classRef);
+  if (!classSnap.exists()) return;
+  const actualJoinCode = classSnap.data()?.joinCode || joinCode || "";
+
+  // 하위 데이터를 지우기 전에 입장 코드가 정말 이 학급 것인지 확인한다.
+  // 다른 학급 코드를 잘못 지우거나, 실패를 숨긴 채 고아 코드를 남기지 않는다.
+  let joinCodeRef = null;
+  if (actualJoinCode) {
+    joinCodeRef = f.doc(db, "joinCodes", actualJoinCode);
+    const joinCodeSnap = await f.getDoc(joinCodeRef);
+    if (joinCodeSnap.exists() && joinCodeSnap.data()?.classId !== classId) {
+      throw new Error("입장 코드가 다른 학급을 가리켜 삭제를 멈췄어요. 관리자에게 알려 주세요.");
+    }
+  }
 
   const [dSnap, aSnap] = await Promise.all([
     f.getDocs(f.collection(db, "classes", classId, "datasets")),
@@ -174,8 +243,9 @@ export async function deleteClass(classId, { joinCode }) {
     ...aSnap.docs.map((d) => f.deleteDoc(d.ref)),
   ]);
 
-  if (joinCode) {
-    await f.deleteDoc(f.doc(db, "joinCodes", joinCode)).catch(() => {});
-  }
-  await f.deleteDoc(f.doc(db, "classes", classId));
+  // 입장 코드와 학급 문서는 마지막에 한 배치로 지워 둘 중 하나만 남지 않게 한다.
+  const batch = f.writeBatch(db);
+  if (joinCodeRef) batch.delete(joinCodeRef);
+  batch.delete(classRef);
+  await batch.commit();
 }

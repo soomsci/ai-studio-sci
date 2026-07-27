@@ -6,7 +6,9 @@
 //     js/teacher-tabs.js가 그린다. 데이터 조회는 js/teacher-data.js. 두 파일 상단 주석 참고.
 
 import { isConfigured, getFirebase } from "./firebase-init.js";
-import { fetchMyClasses, createClass, updateClass, deleteClass, countClassContents } from "./teacher-data.js";
+import {
+  fetchMyClasses, createClass, updateClass, deleteClass, countClassContents, normalizeJoinCode,
+} from "./teacher-data.js";
 import { renderProgressTab, renderChartTab, renderManageTab, renderTvTab } from "./teacher-tabs.js";
 
 let currentUser = null;
@@ -144,7 +146,8 @@ async function handleClassSubmit() {
   const errBox = document.getElementById("new-class-error");
   const submitBtn = document.getElementById("new-class-submit");
   const name = document.getElementById("new-class-name").value.trim();
-  const joinCode = document.getElementById("new-class-code").value.trim();
+  const joinCode = normalizeJoinCode(document.getElementById("new-class-code").value);
+  document.getElementById("new-class-code").value = joinCode;
   errBox.style.display = "none";
 
   if (!name || !joinCode) {
