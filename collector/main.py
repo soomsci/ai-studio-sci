@@ -24,6 +24,15 @@ import uploader
 
 app = Flask(__name__)
 
+# 저장 간격 하한(2026-07-27, 실시간 그래프 요청). 0.1초까지 열려 있으면 45분
+# 측정에 27,000점이 쌓여 §5.2 5,000점 한도로 업로드가 통째로 거부된다.
+# 0.5초여도 45분×0.5초=5,400점이라 아슬아슬하지만, 기본값 10초는 그대로 안전하다.
+MIN_INTERVAL_SEC = 0.5
+
+# ★ 안전장치 — §5.2 5,000점 한도의 90%에 닿으면 화면에 미리 알린다.
+# 측정이 끝난 뒤 업로드 시점에 조용히 거부당하는 것이 제일 나쁘다.
+NEAR_LIMIT_POINTS = int(uploader.MAX_POINTS * 0.9)
+
 
 class _Channel:
     """실시간 센서 1대. 센서 종류·번호·이름표·제목을 함께 들고 있어서,
@@ -37,16 +46,18 @@ class _Channel:
         self.title = title
 
     def to_dict(self) -> dict:
-        points = self.source.latest_points()
+        committed = self.source.latest_points()  # 저장(업로드)될 값 — §5.2 개수 한도 기준
+        display = self.source.display_points()  # 화면 실시간 그래프용 — 확정 값 + 지금 구간 원시값
         return {
             "deviceId": self.device_id,
             "label": self.label,
             "title": self.title,
             "sensor": self.sensor_name,
             "unit": self.source.unit,
-            "count": len(points),
-            "latestValue": points[-1]["v"] if points else None,
-            "points": points,  # 화면의 실시간 그래프가 채널별로 선을 그리는 데 쓴다
+            "count": len(committed),
+            "latestValue": display[-1]["v"] if display else None,
+            "points": display,  # 화면의 실시간 그래프가 채널별로 선을 그리는 데 쓴다
+            "nearLimit": len(committed) >= NEAR_LIMIT_POINTS,
         }
 
 
@@ -106,6 +117,13 @@ def api_setup():
         return jsonify(ok=False, error="모둠을 골라 주세요"), 400
 
     try:
+        interval_sec = float(data.get("intervalSec") or 10)
+    except (TypeError, ValueError):
+        return jsonify(ok=False, error="측정 간격이 올바르지 않습니다"), 400
+    if interval_sec < MIN_INTERVAL_SEC:
+        return jsonify(ok=False, error=f"측정 간격은 {MIN_INTERVAL_SEC}초 이상이어야 해요"), 400
+
+    try:
         config = uploader.load_config()
         id_token, _local_id = uploader.sign_in_anonymously(config["apiKey"])
         class_info = uploader.lookup_class_by_join_code(id_token, config["projectId"], join_code)
@@ -120,7 +138,7 @@ def api_setup():
             "owner_uid": f"collector-{os.getpid()}",  # 업로드 시점에 실제 로그인 결과로 덮어씀
             "exp_no": exp_no,
             "condition": (data.get("condition") or "").strip(),
-            "interval_sec": float(data.get("intervalSec") or 10),
+            "interval_sec": interval_sec,
             "title": (data.get("title") or "").strip(),  # 수동 입력 모드에서만 쓴다
         }
         SESSION.mode = mode
@@ -197,8 +215,8 @@ def api_start():
                 interval_sec = float(data["intervalSec"])
             except (TypeError, ValueError):
                 return jsonify(ok=False, error="측정 간격이 올바르지 않습니다"), 400
-            if interval_sec <= 0:
-                return jsonify(ok=False, error="측정 간격은 0보다 커야 합니다"), 400
+            if interval_sec < MIN_INTERVAL_SEC:
+                return jsonify(ok=False, error=f"측정 간격은 {MIN_INTERVAL_SEC}초 이상이어야 합니다"), 400
             SESSION.meta["interval_sec"] = interval_sec
         try:
             if SESSION.mode == "realtime":
@@ -279,7 +297,10 @@ def api_status():
             channels = [ch.to_dict() for ch in SESSION.channels]
             return jsonify(ok=True, status=SESSION.status, channels=channels)
         points = SESSION.manual_source.latest_points() if SESSION.manual_source else []
-        return jsonify(ok=True, status=SESSION.status, points=points)
+        return jsonify(
+            ok=True, status=SESSION.status, points=points,
+            nearLimit=len(points) >= NEAR_LIMIT_POINTS,
+        )
 
 
 @app.route("/api/stop", methods=["POST"])

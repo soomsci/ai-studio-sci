@@ -17,6 +17,8 @@ function renderChannels(channels) {
   });
   document.getElementById("btnStart").disabled = channels.length === 0;
   updateChannelsChart(channels); // static/chart.js — CDN이 안 불려도 그 안에서 건너뛴다
+  // ★ 안전장치 — 채널 하나라도 저장 한도(§5.2)에 가까워지면 알린다.
+  document.getElementById("pointsWarning").hidden = !channels.some((ch) => ch.nearLimit);
 }
 
 let pollTimer = null;

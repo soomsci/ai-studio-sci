@@ -73,8 +73,8 @@
   <label>이번에 무엇을 다르게 했나요? <input id="condition" placeholder="예: 창문 닫음, 밝은 곳, 물"></label>
   <p class="hint">비교하는 조건을 짧게 써 주세요.</p>
 
-  <label>몇 초마다 한 번씩 잴까요? <input id="intervalSec" type="number" value="10" min="0.01" step="0.1"></label>
-  <p class="hint">보통 그대로 둬도 돼요(10초).</p>
+  <label>몇 초마다 한 번씩 잴까요? <input id="intervalSec" type="number" value="10" min="0.5" step="0.1"></label>
+  <p class="hint">보통 그대로 둬도 돼요(10초). 0.5초보다 짧게는 안 돼요 — 너무 잦으면 측정을 마치고 보낼 때 거부돼요.</p>
 
   <label>측정 방법</label>
   <div class="mode-choice">
@@ -134,15 +134,16 @@
 
   <div class="chart-wrap"><canvas id="channelsChart" height="180"></canvas></div>
 
-  <label>몇 초마다 잴까요? <input id="channelIntervalSec" type="number" value="10" min="0.01" step="0.1"></label>
+  <label>몇 초마다 잴까요? <input id="channelIntervalSec" type="number" value="10" min="0.5" step="0.1"></label>
   <p class="hint">물·식용유처럼 빨리 변하는 건 1~2초, 교실 공기처럼 천천히
-     변하는 건 10초쯤이 좋아요.</p>
+     변하는 건 10초쯤이 좋아요. 0.5초보다 짧게는 안 돼요.</p>
 
   <div class="row">
     <button id="btnStart" disabled>모든 센서 측정 시작</button>
     <button id="btnStop" disabled>측정 종료</button>
   </div>
   <p id="measureStatus" class="hint" hidden><span class="dot"></span>측정 중</p>
+  <p id="pointsWarning" class="hint" style="color:#b00" hidden>곧 저장 한도에 닿아요. 측정을 마치고 서버로 보내 주세요.</p>
   <label>이 순간을 모든 센서에 함께 기록하고 싶다면(예: 가열 시작)
     <input id="eventLabel" placeholder="예: 가열 시작">
   </label>
@@ -165,6 +166,7 @@
     </label>
     <button id="btnEvent2" disabled>이 순간 기록하기</button>
     <p>모은 값: <span id="point-count2">0</span>개</p>
+    <p id="pointsWarning2" class="hint" style="color:#b00" hidden>곧 저장 한도에 닿아요. 측정을 마치고 서버로 보내 주세요.</p>
     <div class="chart-wrap"><canvas id="manualChart" height="180"></canvas></div>
   </div>
 

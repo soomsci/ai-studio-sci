@@ -137,7 +137,8 @@ class PascoSensorSource:
         self.unit = PASCO_SENSORS[sensor_name]["unit"]
         self.device_id: str | None = None
         self._device = None
-        self._points: list[dict] = []
+        self._points: list[dict] = []  # 저장(업로드)용 — 저장 간격마다 평균 1점만 남는다
+        self._bucket: list[tuple[float, float]] = []  # (경과초, 원시값) — 화면용, 다음 저장 시점까지만 쌓인다
         self._events: list[dict] = []
         self._start_time: float | None = None
         self._stop_flag = threading.Event()
@@ -191,6 +192,7 @@ class PascoSensorSource:
         if not self._device:
             raise SensorConnectionError("connect()를 먼저 호출해야 합니다")
         self._points = []
+        self._bucket = []
         self._events = []
         self._start_time = time.monotonic()
         self._stop_flag.clear()
@@ -198,8 +200,15 @@ class PascoSensorSource:
         self._thread.start()
 
     def _poll_loop(self, interval_sec: float) -> None:
+        """읽는 속도와 저장 간격을 떼어 놓는다(2026-07-27, 실시간 그래프 요청).
+
+        센서는 쉬지 않고 계속 읽는다 — read_data() 자체가 블로킹 왕복(중앙 60ms,
+        세션 G 실측)이라 별도로 쉬지 않아도 CPU를 100% 쓰지 않는다. 읽은 값은
+        매번 _bucket에 쌓아 화면(display_points)이 바로 보게 하고, interval_sec가
+        찰 때마다 그 사이 값의 평균 1점만 _points(=업로드될 데이터)에 남긴다.
+        이러면 §5.2의 점 개수 한도를 그대로 지키면서도 그래프는 부드럽게 흐른다."""
+        next_flush = time.monotonic() + interval_sec
         while not self._stop_flag.is_set():
-            elapsed = time.monotonic() - self._start_time
             try:
                 value = self._device.read_data(self.measurement)  # ⚠ 센서 입수 후 테스트 필요
             except (
@@ -209,9 +218,25 @@ class PascoSensorSource:
             ) as exc:
                 print(f"[sensor.py] 측정값 읽기 실패, 다음 주기에 재시도: {exc}")
                 self._stop_flag.wait(interval_sec)
+                next_flush = time.monotonic() + interval_sec
                 continue
-            self._points.append({"t": round(elapsed, 1), "v": value})
-            self._stop_flag.wait(interval_sec)
+
+            elapsed = time.monotonic() - self._start_time
+            self._bucket.append((elapsed, value))
+
+            if time.monotonic() >= next_flush:
+                self._flush_bucket()
+                next_flush += interval_sec  # 다음 시각을 누적으로 잡아 처리 시간만큼 밀리지 않게 한다
+
+        self._flush_bucket()  # 종료 시 남은 구간도 값을 버리지 않고 마지막 점으로 저장한다
+
+    def _flush_bucket(self) -> None:
+        if not self._bucket:
+            return
+        avg = sum(v for _, v in self._bucket) / len(self._bucket)
+        t = self._bucket[-1][0]
+        self._points.append({"t": round(t, 1), "v": round(avg, 4)})
+        self._bucket = []
 
     def record_event(self, label: str) -> None:
         if self._start_time is None:
@@ -220,8 +245,17 @@ class PascoSensorSource:
         self._events.append({"t": round(elapsed, 1), "label": label})
 
     def latest_points(self) -> list[dict]:
-        """측정 중 실시간 그래프 갱신용 — 현재까지 쌓인 점을 반환한다."""
+        """업로드용 — 저장 간격마다 평균 낸 확정 점만 돌려준다(§5.2 개수 한도 기준)."""
         return list(self._points)
+
+    def display_points(self) -> list[dict]:
+        """실시간 그래프용 — 확정 점(_points) 뒤에 지금 채우고 있는 구간의 원시값을
+        그대로 이어 붙인다. 확정 점만 보내면 그래프가 저장 간격(기본 10초)마다
+        한 번씩만 움직여 "거의 실시간"으로 안 보인다. 구간 원시값 개수는
+        저장 간격 하나 분량으로 자연히 제한되므로(예: 10초 ÷ 60ms ≈ 166개)
+        매 폴링(0.8초)마다 통째로 보내도 화면이 느려지지 않는다."""
+        tail = [{"t": round(t, 2), "v": v} for t, v in self._bucket]
+        return self._points + tail
 
     def latest_events(self) -> list[dict]:
         return list(self._events)

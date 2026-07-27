@@ -83,5 +83,7 @@ async function refreshManualChart() {
   if (data.ok && data.points) {
     const opt = document.getElementById("manualSensorSelect").selectedOptions[0];
     updateManualChart(data.points, opt ? opt.dataset.unit : "");
+    // ★ 안전장치 — 저장 한도(§5.2)에 가까워지면 알린다.
+    document.getElementById("pointsWarning2").hidden = !data.nearLimit;
   }
 }
