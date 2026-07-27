@@ -10,6 +10,30 @@ import { MODE, listClassDatasets, getAnalysis } from "./data.js";
 
 export const DEFAULT_VISIBLE_EXPS = [1, 2, 3]; // visibleExps 필드가 없는 학급의 기본값 (SPEC §5.2, v2.0)
 
+// 새 입장 코드는 한 형태로만 저장한다. 학생·수집기의 기존 코드 호환 조회는
+// 그대로 두므로, 예전에 소문자·혼합 대소문자로 만든 학급도 계속 들어갈 수 있다.
+export function normalizeJoinCode(value) {
+  return String(value || "").trim().toUpperCase();
+}
+
+function validateJoinCode(joinCode) {
+  if (!joinCode) throw new Error("입장 코드를 입력해 주세요.");
+  if (joinCode.includes("/")) throw new Error("입장 코드에는 /를 쓸 수 없어요.");
+}
+
+async function assertJoinCodeAvailable(f, db, joinCode, oldJoinCode = "") {
+  // 새 코드는 대문자로 저장하지만, 예전에 전부 소문자로 저장된 코드와도
+  // 충돌하지 않게 두 형태를 확인한다. 현재 학급의 옛 코드는 검사에서 뺀다.
+  const candidates = [...new Set([joinCode, joinCode.toLowerCase()])]
+    .filter((code) => code !== oldJoinCode);
+  for (const code of candidates) {
+    const snap = await f.getDoc(f.doc(db, "joinCodes", code));
+    if (snap.exists()) {
+      throw new Error("이미 쓰이고 있는 입장 코드예요. 다른 코드를 써 주세요.");
+    }
+  }
+}
+
 async function fsCtx() {
   const { db, fsMod } = await getFirebase();
   return { db, f: fsMod };
@@ -67,16 +91,15 @@ export async function setVisibleExpsField(classId, exps) {
 // 순서가 중요하다: joinCodes 쓰기 규칙이 classes 문서의 teacherUid를 확인하므로
 // classes를 먼저 만들고, 그다음 joinCodes를 순차로 만든다 (배치로 묶으면 안 됨, SPEC §5.2).
 export async function createClass({ name, joinCode, teacherUid }) {
+  joinCode = normalizeJoinCode(joinCode);
+  validateJoinCode(joinCode);
   if (MODE === "mock") {
     return { id: "mock-class-" + Date.now(), name, joinCode, teacherUid, activeExp: 1, visibleExps: DEFAULT_VISIBLE_EXPS };
   }
   const { db, f } = await fsCtx();
 
   // 입장 코드 중복 확인 — 이미 쓰이는 코드를 덮어쓰면 다른 반 학생이 엉뚱한 학급으로 들어간다
-  const codeSnap = await f.getDoc(f.doc(db, "joinCodes", joinCode));
-  if (codeSnap.exists()) {
-    throw new Error("이미 쓰이고 있는 입장 코드예요. 다른 코드를 써 주세요.");
-  }
+  await assertJoinCodeAvailable(f, db, joinCode);
 
   // 1) classes 문서 먼저
   const classRef = await f.addDoc(f.collection(db, "classes"), {
@@ -108,15 +131,14 @@ export async function createClass({ name, joinCode, teacherUid }) {
 // ① 새 코드 중복 확인 → ② classes.joinCode 갱신 → ③ 새 joinCodes 생성 + 옛 joinCodes 삭제.
 // 셋 중 하나라도 실패하면 학생이 입장 못 하는 상태가 남을 수 있어 단계별로 다른 안내를 던진다.
 export async function updateClass(classId, { name, joinCode, oldJoinCode }) {
+  joinCode = normalizeJoinCode(joinCode);
+  validateJoinCode(joinCode);
   if (MODE === "mock") return;
   const { db, f } = await fsCtx();
   const codeChanged = joinCode && joinCode !== oldJoinCode;
 
   if (codeChanged) {
-    const codeSnap = await f.getDoc(f.doc(db, "joinCodes", joinCode));
-    if (codeSnap.exists()) {
-      throw new Error("이미 쓰이고 있는 입장 코드예요. 다른 코드를 써 주세요.");
-    }
+    await assertJoinCodeAvailable(f, db, joinCode, oldJoinCode);
   }
 
   // ② classes 문서 갱신 (이름 + 코드가 바뀌었으면 코드도 함께)
