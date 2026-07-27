@@ -351,7 +351,7 @@ async function drawChart(canvasEl, topic, opts, anno) {
 async function drawScatterChart(canvasEl, topic, opts, picked) {
   const ours = picked
     .map((d) => ({ x: EXP3.intensityStep[d.condition], y: peakValue(d) }))
-    .filter((p) => p.x != null);
+    .filter((p) => p.x != null && Number.isFinite(p.y));
 
   const spec = {
     type: "scatter",
@@ -367,7 +367,9 @@ async function drawScatterChart(canvasEl, topic, opts, picked) {
     const others = classDatasets.filter(
       (d) => d.groupId !== session.groupId && EXP3.intensityStep[d.condition] != null
     );
-    const otherPoints = others.map((d) => ({ x: EXP3.intensityStep[d.condition], y: peakValue(d) }));
+    const otherPoints = others
+      .map((d) => ({ x: EXP3.intensityStep[d.condition], y: peakValue(d) }))
+      .filter((p) => Number.isFinite(p.y));
     if (otherPoints.length) {
       spec.datasets.unshift({ label: "다른 모둠", points: otherPoints, color: "#cbd5e1" });
     }
@@ -399,9 +401,12 @@ async function drawLineChart(canvasEl, topic, opts, picked, anno) {
     const classDatasets = await listClassDatasets(EXP3.expNo);
     if (!canvasEl.isConnected) return;
     // 회복 곡선과 비교할 값이므로 운동 조건만 모아 "학급 평균 최고 심박수"를 계산한다
-    const exercised = classDatasets.filter((d) => d.condition === "가벼운 운동 후" || d.condition === "심한 운동 후");
-    if (exercised.length) {
-      spec.refLine = { value: avg(exercised.map(peakValue)), label: "학급 평균 최고 심박수", color: EXP3.classAvgColor };
+    const exercisedPeaks = classDatasets
+      .filter((d) => d.condition === "가벼운 운동 후" || d.condition === "심한 운동 후")
+      .map(peakValue)
+      .filter(Number.isFinite);
+    if (exercisedPeaks.length) {
+      spec.refLine = { value: avg(exercisedPeaks), label: "학급 평균 최고 심박수", color: EXP3.classAvgColor };
     }
   } else if (!canvasEl.isConnected) {
     return;
@@ -413,12 +418,12 @@ async function drawLineChart(canvasEl, topic, opts, picked, anno) {
 
 // ── 자동 계산 ─────────────────────────────────────────────
 function peakValue(d) {
-  return Math.max(...d.points.map((p) => p.v));
+  return d.points.length ? Math.max(...d.points.map((p) => p.v)) : null;
 }
 
 // 마지막 seconds초 동안의 평균값 — "측정 끝 무렵" 수준을 어림한다
 function tailAverage(points, seconds) {
-  if (!points.length) return 0;
+  if (!points.length) return null;
   const cut = points.at(-1).t - seconds;
   const tail = points.filter((p) => p.t >= cut);
   const use = tail.length ? tail : [points.at(-1)];
@@ -440,6 +445,7 @@ function computeStatsIntensity(d) {
 // 주제②: 최고 심박수 / 기저 수준(±여유값)까지 돌아오는 데 걸린 시간
 function computeStatsRecovery(d, topic) {
   const baseline = tailAverage(d.points, 30);
+  if (baseline == null) return { peak: null, recoverTime: null };
   const target = baseline + (topic.recoverMargin ?? 3);
   const recovered = d.points.find((p) => p.v <= target);
   return {
@@ -457,6 +463,7 @@ function fmtTime(sec) {
 
 // 값 + 단위 (예: "132.4 bpm")
 function fmtV(v, unit) {
+  if (!Number.isFinite(v)) return null;
   return `${Math.round(v * 10) / 10} ${unit || "bpm"}`;
 }
 

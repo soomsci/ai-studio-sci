@@ -94,6 +94,9 @@ export async function listClassDatasets(expNo) {
 
 // 측정 1회 저장 → 새 문서 아이디를 돌려준다
 export async function saveDataset(dataset) {
+  if (!Array.isArray(dataset.points) || dataset.points.length === 0) {
+    throw new Error("측정값이 하나도 없어요. 값을 한 번 이상 잰 뒤 저장해 주세요.");
+  }
   if (dataset.points?.length > MAX_POINTS) {
     console.warn(`측정 점이 ${dataset.points.length}개입니다. ${MAX_POINTS}개를 넘으면 저장이 실패할 수 있어요.`);
   }

@@ -42,9 +42,16 @@ service cloud.firestore {
         && get(/databases/$(database)/documents/classes/$(classId)).data.teacherUid == request.auth.uid;
     }
 
+    // Firestore는 부모 문서가 없어도 하위 컬렉션에 쓸 수 있으므로,
+    // 고아 측정·분석 문서가 생기지 않게 쓰기 때 학급 존재를 확인한다.
+    function classExists(classId) {
+      return exists(/databases/$(database)/documents/classes/$(classId));
+    }
+
     // 측정 문서 쓰기 검증 (§5.2 한도를 규칙으로도 막는다)
     function validDataset() {
-      return request.resource.data.points.size() <= 5000
+      return request.resource.data.points.size() >= 1
+        && request.resource.data.points.size() <= 5000
         && request.resource.data.expNo in [1, 2, 3, 4]; // 4 = 비열 (v2.0)
     }
 
@@ -79,10 +86,12 @@ service cloud.firestore {
         allow read: if signedIn();
         // 만들 때는 자기 uid를 ownerUid로 적어야 하고, 크기 검증을 통과해야 한다
         allow create: if signedIn()
+          && classExists(classId)
           && request.resource.data.ownerUid == request.auth.uid
           && validDataset();
         // 고치는 것도 같은 검증을 거친다 (본인 또는 교사만)
         allow update: if signedIn()
+          && classExists(classId)
           && (resource.data.ownerUid == request.auth.uid || isTeacherOf(classId))
           && validDataset();
         allow delete: if signedIn()
@@ -92,7 +101,7 @@ service cloud.firestore {
       match /analyses/{analysisId} {
         allow read: if signedIn();
         // 분석은 모둠이 자유롭게 쓰고 고친다 (ownerUid로 잠그지 않는 이유는 맨 위 주석)
-        allow create, update: if signedIn();
+        allow create, update: if signedIn() && classExists(classId);
         // 삭제는 교사만 (실수로 모둠 분석이 날아가는 것 방지)
         allow delete: if isTeacherOf(classId);
       }

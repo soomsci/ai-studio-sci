@@ -117,6 +117,10 @@ def validate(ds: Dataset) -> None:
         if not getattr(ds, name):
             raise SchemaError(f"{name}은(는) 비어 있을 수 없습니다")
 
+    if not ds.points:
+        raise SchemaError(
+            "측정값이 하나도 없습니다. 값을 한 번 이상 잰 뒤 서버로 보내 주세요."
+        )
     if len(ds.points) > MAX_POINTS:
         raise SchemaError(
             f"points가 {len(ds.points)}개입니다. {MAX_POINTS}개를 넘으면 "
