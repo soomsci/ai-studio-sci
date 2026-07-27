@@ -211,7 +211,7 @@ function renderStep1Info(slotEl) {
       return `<tr>
         <td>${d.title}</td><td>${d.condition}</td>
         <td>${mins}분</td><td>${d.intervalSec}초</td>
-        <td>${fmtV(Math.min(...vs))} ~ ${fmtV(Math.max(...vs))}</td>
+        <td>${vs.length ? `${fmtV(Math.min(...vs))} ~ ${fmtV(Math.max(...vs))}` : "값 없음"}</td>
         <td>${evts}</td>
       </tr>`;
     })
@@ -350,6 +350,10 @@ function computeStats(ds) {
   const ref = EXP1.refLine.value;
   const pts = ds.points;
   const out = {};
+
+  // 값이 하나도 없는 측정(수집기 오류 등). Math.max(...[])가 -∞를 내므로 먼저 걸러 낸다.
+  // 전부 null로 두면 표에 "—"로 나온다 — 학생에게 ∞를 보이지 않는다.
+  if (!pts.length) return { max: null, riseRate: null, crossTime: null, recoverTime: null };
 
   out.max = fmtV(Math.max(...pts.map((p) => p.v)));
 

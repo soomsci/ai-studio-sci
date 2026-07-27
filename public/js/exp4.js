@@ -223,7 +223,8 @@ function renderStep1Info(slotEl) {
       return `<tr>
         <td>${d.title}</td><td>${d.condition}</td>
         <td>${mins}분</td><td>${d.intervalSec}초</td>
-        <td>${fmtV(d.points[0].v)}</td><td>${fmtV(d.points.at(-1).v)}</td>
+        <td>${d.points.length ? fmtV(d.points[0].v) : "값 없음"}</td>
+        <td>${d.points.length ? fmtV(d.points.at(-1).v) : "값 없음"}</td>
         <td>${evts}</td>
       </tr>`;
     })
@@ -333,7 +334,8 @@ function drawChart(boxEl, opts, noteEl) {
   // "얼마나 올랐는지로 보기" — 각 측정의 시작 온도를 빼서 0에서 출발시킨다.
   // 시작 온도가 서로 달라도 공평하게 견줄 수 있는지 학생이 직접 확인하는 장치다.
   const delta = Boolean(opts.showDelta);
-  const shift = (d) => (delta ? d.points[0].v : 0);
+  // 값이 하나도 없는 측정이면 뺄 기준도 없다 (0으로 두면 빈 선이 그려질 뿐 화면이 죽지 않는다)
+  const shift = (d) => (delta && d.points.length ? d.points[0].v : 0);
 
   const spec = {
     xLabel: EXP4.xLabel,
@@ -380,6 +382,11 @@ function drawChart(boxEl, opts, noteEl) {
 function computeStats(ds) {
   const pts = ds.points;
   const out = {};
+
+  // 값이 하나도 없는 측정(수집기 오류 등). pts[0].v를 그대로 읽으면 화면이 죽는다.
+  // 전부 null로 두면 표에 "—"로 나온다.
+  if (!pts.length) return { startTemp: null, endTemp: null, deltaT: null, riseRate: null };
+
   const first = pts[0].v;
   const last = pts.at(-1).v;
 
