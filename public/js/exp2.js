@@ -376,7 +376,9 @@ function drawChart(canvasEl, opts, noteEl) {
     spec.yLabel = EXP2.yLabel;
     spec.tooltip = EXP2.tooltip;
     spec.datasets = picked.map((d) => ({ label: `${d.title} (${d.condition})`, points: d.points }));
-    spec.events = picked.flatMap((d) => d.events || []);
+    spec.events = picked.flatMap((d) => d.events || []);   // 회색 — 수집기가 기록한 원본 (건드리지 않는다)
+    spec.annotations = analysis.annotations;               // 빨강 — 학생이 단 메모 (analysis에만 저장)
+    if (opts.onPickTime) spec.onAddAnnotation = opts.onPickTime;
   }
   renderChart(canvasEl, spec);
 }
@@ -450,6 +452,10 @@ function injectStyle() {
     .exp2-table { border-collapse: collapse; font-size: 14px; margin: 8px 0; width: 100%; }
     .exp2-table th, .exp2-table td { border: 1px solid #ddd; padding: 4px 8px; text-align: left; }
     .exp2-table th { background: #f6f7f9; }
+    /* 계획을 세우기 전 잠긴 영역 — 보이되 누를 수 없다 */
+    .exp2-locked { opacity: 0.45; filter: grayscale(0.4); }
+    .exp2-lockmsg { margin: 4px 2px; color: #b45309; font-size: 15px; }
+    /* 사건 메모선 입력칸·목록 스타일은 js/annotations.js가 직접 넣는다 */
   `;
   document.head.append(style);
 }
