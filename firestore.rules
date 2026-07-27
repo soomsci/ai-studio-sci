@@ -14,7 +14,8 @@ rules_version = '2';
 //
 // 요지:
 //   - joinCodes: get만 허용(문서 하나 지정). list 차단 → 코드를 모르면 학급을 못 찾는다
-//   - classes: get은 인증자 모두, list는 자기(teacherUid) 학급 조건 쿼리만 통과
+//   - classes: get은 인증자 모두, list는 자기(teacherUid) 학급 조건 쿼리만 통과.
+//     만들기·고치기·지우기는 익명이 아닌 계정(교사)만 — 익명 학생의 유령 학급 차단
 //   - datasets: 읽기는 인증자(학급 비교용), 쓰기는 본인·교사 + 크기 검증
 //   - 인증 없는 접근: 전면 차단 (기본 거부)
 
@@ -25,9 +26,19 @@ service cloud.firestore {
       return request.auth != null;
     }
 
+    // 익명 로그인이 아닌 실제 계정인가 (= 교사). 학생은 익명으로 들어온다.
+    // 2026-07-27 이 프로젝트의 실제 익명 토큰을 열어 확인한 값:
+    //   firebase.sign_in_provider == "anonymous", identities == {}, email 없음
+    // 교사(teacher.js)는 구글 로그인만 쓰므로 "google.com"이 들어온다.
+    // 'google.com'만 허용하지 않고 "익명이 아님"으로 둔 이유: 나중에 다른 방식으로
+    // 교사 로그인을 늘려도 규칙이 막지 않도록 하기 위해서다.
+    function realAccount() {
+      return signedIn() && request.auth.token.firebase.sign_in_provider != 'anonymous';
+    }
+
     // 해당 학급의 교사인가 (classes 문서의 teacherUid와 비교)
     function isTeacherOf(classId) {
-      return signedIn()
+      return realAccount()
         && get(/databases/$(database)/documents/classes/$(classId)).data.teacherUid == request.auth.uid;
     }
 
@@ -53,8 +64,10 @@ service cloud.firestore {
       // list: 교사가 where("teacherUid","==",본인)으로 거는 쿼리만 통과.
       // 조건 없는 전체 조회는 남의 학급이 섞일 수 있으므로 Firestore가 거부한다.
       allow list: if signedIn() && resource.data.teacherUid == request.auth.uid;
-      // 학급 생성·수정·삭제는 교사만
-      allow create: if signedIn() && request.resource.data.teacherUid == request.auth.uid;
+      // 학급 생성·수정·삭제는 교사만.
+      // signedIn()만 보면 익명 학생이 자기 uid를 교사라고 적어 유령 학급을
+      // 무제한 만들 수 있었다(BUG-03). 그 안에 생긴 분석 문서는 아무도 못 지운다.
+      allow create: if realAccount() && request.resource.data.teacherUid == request.auth.uid;
       allow update, delete: if isTeacherOf(classId);
 
       match /groups/{groupId} {
