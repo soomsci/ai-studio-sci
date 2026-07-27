@@ -94,8 +94,36 @@ async function reload() {
   if (!picked.length) picked = [...ids];
   analysis.datasetIds = picked;
 
+  // 실험 계획 단계 — 다 채우면 (다섯 번째 인자로) 알려 준다
+  renderSteps(
+    rootEl.querySelector("#exp4-design-steps"),
+    EXP4.designSteps,
+    analysis,
+    saveAnalysis,
+    () => applyLock()
+  );
+
   renderDatasetList(rootEl.querySelector("#exp4-list"));
   renderSteps(rootEl.querySelector("#exp4-steps"), buildSteps(), analysis, saveAnalysis);
+  applyLock(); // 새로고침으로 다시 들어온 모둠도 지금 상태로 판단한다
+}
+
+// ── 계획을 세우기 전에는 측정·분석을 잠가 둔다 ────────────
+// 감추지는 않는다. 무엇이 기다리는지는 보이되 아직 누를 수 없는 상태로 둔다.
+// ★ 이미 잰 측정이 하나라도 있으면 잠그지 않는다. 수집기(별도 앱)로 먼저 잰
+//   모둠이 웹앱에서 막히면 수업이 그 자리에서 멈추기 때문이다.
+function applyLock() {
+  const locked = datasets.length === 0 && !isStepsComplete(EXP4.designSteps, analysis);
+  const msgEl = rootEl.querySelector("#exp4-lockmsg");
+  msgEl.hidden = !locked;
+  msgEl.textContent = locked
+    ? "🔒 먼저 실험 계획을 세워 보세요. 위 세 단계를 다 적으면 아래에서 측정을 시작할 수 있어요."
+    : "";
+  for (const sel of ["#exp4-measure", "#exp4-steps"]) {
+    const el = rootEl.querySelector(sel);
+    el.classList.toggle("exp4-locked", locked);
+    el.inert = locked; // 잠긴 동안은 누르기·글쓰기가 되지 않는다
+  }
 }
 
 // 지금 분석에 골라 둔 측정들
@@ -202,7 +230,12 @@ function renderStep1Info(slotEl) {
     .join("");
   slotEl.innerHTML = `<table class="exp4-table">
     <thead><tr><th>측정</th><th>물질</th><th>측정 시간</th><th>간격</th><th>시작 온도</th><th>끝 온도</th><th>기록된 일</th></tr></thead>
-    <tbody>${rows}</tbody></table>${compareNote(picked)}`;
+    <tbody>${rows}</tbody></table>${compareNote(picked)}
+    <p class="exp4-help">아래는 센서가 기록한 값 그대로예요. 표를 넘겨 보거나 파일로 내려받아 확인해 보세요.</p>
+    <div id="exp4-raw"></div>`;
+
+  // 원본 측정값 표 + CSV 내려받기 (raw-data.js, 읽기 전용)
+  renderRawDataTable(slotEl.querySelector("#exp4-raw"), picked, "측정데이터_실험4");
 }
 
 // 2단계: 그래프 + 보는 방식 고르기 (선/막대, 시작 온도를 0으로 맞춰 보기)
@@ -215,7 +248,18 @@ function renderStep2Chart(slotEl) {
       <label class="exp4-gap"><input type="checkbox" id="exp4-delta" ${opts.showDelta ? "checked" : ""}> 얼마나 올랐는지로 보기</label>
     </div>
     <div class="exp4-chartbox"><canvas></canvas></div>
-    <p class="exp4-dim" id="exp4-barnote"></p>`;
+    <p class="exp4-dim" id="exp4-barnote"></p>
+    <div id="exp4-anno"></div>`;
+
+  // 사건 메모선 — 입력칸·목록·지우기는 공통 모듈이 맡는다.
+  // ★ 여기서 딱 한 번만 붙인다. draw() 안에서 붙이면 그래프를 다시 그릴 때마다
+  //   학생이 쓰던 메모 글이 지워진다.
+  const anno = mountAnnotations(slotEl.querySelector("#exp4-anno"), {
+    analysis,
+    onSave: saveAnalysis,
+    onChange: () => draw(), // 메모가 늘거나 줄면 그래프를 다시 그린다
+    placeholder: "예) 불 켜기",
+  });
 
   slotEl.querySelectorAll("input[name=exp4-type]").forEach((r) =>
     r.addEventListener("change", () => {
@@ -231,7 +275,17 @@ function renderStep2Chart(slotEl) {
     draw();
   });
 
-  const draw = () => drawChart(slotEl.querySelector(".exp4-chartbox"), opts, slotEl.querySelector("#exp4-barnote"));
+  // 그래프를 누르면 그 시각에 메모선을 남길 수 있다 (선그래프에서만 — 막대에는 시간축이 없다)
+  const draw = () => {
+    drawChart(
+      slotEl.querySelector(".exp4-chartbox"),
+      { ...opts, onPickTime: anno.openAt },
+      slotEl.querySelector("#exp4-barnote")
+    );
+    if (opts.chartType !== "line") anno.close(); // 막대그래프에서는 열려 있던 입력칸을 닫는다
+    anno.refresh();
+  };
+
   draw();
 }
 
@@ -242,6 +296,7 @@ function renderStep3Chart(slotEl) {
     <div class="exp4-chartbox"><canvas></canvas></div>
     <div id="exp4-stats"></div>`;
   // 3단계에서는 원래 온도로 본다. 정확한 값을 그래프에서 읽어야 하는 질문들이기 때문이다.
+  // 2단계에서 단 메모선도 함께 보인다 (여기서는 새로 찍지 않고 패턴과 견주어 보기만 한다)
   drawChart(slotEl.querySelector(".exp4-chartbox"), { chartType: "line", showDelta: false });
 
   const statsEl = slotEl.querySelector("#exp4-stats");
@@ -296,7 +351,10 @@ function drawChart(boxEl, opts, noteEl) {
       value: round1(p.v - base),
       color: "#2563eb",
     }));
-    if (noteEl) noteEl.textContent = `막대그래프에는 첫 번째 측정(${d.title})만 보여요.`;
+    // 막대그래프에는 시간축이 없으므로 메모선을 찍을 수 없다
+    if (noteEl) {
+      noteEl.textContent = `막대그래프에는 첫 번째 측정(${d.title})만 보여요. 메모선은 선그래프에서만 찍을 수 있어요.`;
+    }
   } else {
     spec.type = "line";
     spec.datasets = picked.map((d) => {
@@ -306,7 +364,9 @@ function drawChart(boxEl, opts, noteEl) {
         points: d.points.map((p) => ({ t: p.t, v: round1(p.v - base) })),
       };
     });
-    spec.events = picked.flatMap((d) => d.events || []); // "가열 시작" 등이 있으면 세로선으로
+    spec.events = picked.flatMap((d) => d.events || []); // 회색 — 수집기 원본("가열 시작" 등, 건드리지 않는다)
+    spec.annotations = analysis.annotations;             // 빨강 — 학생이 단 메모 (analysis에만 저장)
+    if (opts.onPickTime) spec.onAddAnnotation = opts.onPickTime;
   }
   renderChart(canvasEl, spec);
 }
@@ -387,6 +447,10 @@ function injectStyle() {
     .exp4-table { border-collapse: collapse; font-size: 14px; margin: 8px 0; width: 100%; }
     .exp4-table th, .exp4-table td { border: 1px solid #ddd; padding: 4px 8px; text-align: left; }
     .exp4-table th { background: #f6f7f9; }
+    /* 계획을 세우기 전 잠긴 영역 — 보이되 누를 수 없다 */
+    .exp4-locked { opacity: 0.45; filter: grayscale(0.4); }
+    .exp4-lockmsg { margin: 4px 2px; color: #b45309; font-size: 15px; }
+    /* 사건 메모선 입력칸·목록 스타일은 js/annotations.js가 직접 넣는다 */
   `;
   document.head.append(style);
 }

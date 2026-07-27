@@ -2,15 +2,18 @@
 //
 // 화면 구성 (위 → 아래):
 //   ① 탐구 질문 헤더
-//   ② 우리 모둠 측정 목록 + 연습 데이터 만들기 + 분석에 쓸 측정 고르기
-//   ③ 분석 5단계 (steps.js의 renderSteps) — 변인 기록·그래프·자동 계산은 render 훅으로 끼움
+//   ② 실험 계획 세우기 (config의 designSteps) — 다 채워야 아래가 열린다
+//   ③ 우리 모둠 측정 목록 + 연습 데이터 만들기 + 분석에 쓸 측정 고르기
+//   ④ 분석 5단계 (steps.js의 renderSteps) — 변인 기록·축 관문·그래프·자동 계산은 render 훅으로 끼움
 //
 // 문구·질문·그래프 설정은 전부 config/exp2.config.js에 있다.
 
 import { EXP2 } from "../config/exp2.config.js";
 import { listDatasets, saveDataset, getAnalysis, saveAnalysis } from "./data.js";
 import { renderChart } from "./chart-kit.js";
-import { renderSteps } from "./steps.js";
+import { renderSteps, isStepsComplete } from "./steps.js";
+import { renderRawDataTable } from "./raw-data.js";
+import { mountAnnotations } from "./annotations.js";
 import { getSession } from "./auth.js";
 
 let rootEl = null;
@@ -32,7 +35,15 @@ export async function mount(containerEl) {
       <p class="exp2-question">탐구 질문: <strong>${EXP2.question}</strong></p>
     </section>
 
-    <section class="exp2-box">
+    <section class="exp2-box" id="exp2-design">
+      <h3>실험 계획 세우기</h3>
+      <p class="exp2-help">재기 전에 어떻게 실험할지 먼저 정해요. 다 적으면 아래 측정 화면이 열려요.</p>
+      <div id="exp2-design-steps"></div>
+    </section>
+
+    <p class="exp2-lockmsg" id="exp2-lockmsg" hidden></p>
+
+    <section class="exp2-box" id="exp2-measure">
       <h3>우리 모둠의 측정</h3>
       <p class="exp2-help">분석에 쓸 측정을 골라 주세요. 같은 조건을 여러 번 쟀다면 모두 골라 평균을 낼 수 있어요.</p>
       <div id="exp2-list"><p class="exp2-dim">측정 목록을 불러오는 중…</p></div>
@@ -69,6 +80,7 @@ async function reload() {
   analysis.chartOptions.manipulated = analysis.chartOptions.manipulated || "";
   analysis.chartOptions.controlled = analysis.chartOptions.controlled || "";
   analysis.chartType = analysis.chartOptions.chartType;
+  analysis.annotations = analysis.annotations || []; // 학생이 그래프에 남긴 사건 메모선
 
   // 지워진 측정은 선택에서 빼고, 아무것도 안 골랐으면 전부 고른 것으로 시작한다
   const ids = datasets.map((d) => d.id);
@@ -76,8 +88,36 @@ async function reload() {
   if (!picked.length) picked = [...ids];
   analysis.datasetIds = picked;
 
+  // 실험 계획 단계 — 다 채우면 (다섯 번째 인자로) 알려 준다
+  renderSteps(
+    rootEl.querySelector("#exp2-design-steps"),
+    EXP2.designSteps,
+    analysis,
+    saveAnalysis,
+    () => applyLock()
+  );
+
   renderDatasetList(rootEl.querySelector("#exp2-list"));
   renderSteps(rootEl.querySelector("#exp2-steps"), buildSteps(), analysis, saveAnalysis);
+  applyLock(); // 새로고침으로 다시 들어온 모둠도 지금 상태로 판단한다
+}
+
+// ── ⑤ 계획을 세우기 전에는 측정·분석을 잠가 둔다 ──────────
+// 감추지는 않는다. 무엇이 기다리는지는 보이되 아직 누를 수 없는 상태로 둔다.
+// ★ 이미 잰 측정이 하나라도 있으면 잠그지 않는다. 수집기(별도 앱)로 먼저 잰
+//   모둠이 웹앱에서 막히면 수업이 그 자리에서 멈추기 때문이다.
+function applyLock() {
+  const locked = datasets.length === 0 && !isStepsComplete(EXP2.designSteps, analysis);
+  const msgEl = rootEl.querySelector("#exp2-lockmsg");
+  msgEl.hidden = !locked;
+  msgEl.textContent = locked
+    ? "🔒 먼저 실험 계획을 세워 보세요. 위 세 단계를 다 적으면 아래에서 측정을 시작할 수 있어요."
+    : "";
+  for (const sel of ["#exp2-measure", "#exp2-steps"]) {
+    const el = rootEl.querySelector(sel);
+    el.classList.toggle("exp2-locked", locked);
+    el.inert = locked; // 잠긴 동안은 누르기·글쓰기가 되지 않는다
+  }
 }
 
 // 지금 분석에 골라 둔 측정들
@@ -212,7 +252,12 @@ function renderStep1Vars(slotEl) {
     .join("");
   tableEl.innerHTML = `<table class="exp2-table">
     <thead><tr><th>조건</th><th>반복 횟수</th></tr></thead>
-    <tbody>${rows}</tbody></table>`;
+    <tbody>${rows}</tbody></table>
+    <p class="exp2-help">아래는 센서가 기록한 값 그대로예요. 표를 넘겨 보거나 파일로 내려받아 확인해 보세요.</p>
+    <div id="exp2-raw"></div>`;
+
+  // 원본 측정값 표 + CSV 내려받기 (raw-data.js, 읽기 전용)
+  renderRawDataTable(slotEl.querySelector("#exp2-raw"), picked, "측정데이터_실험2");
 }
 
 // 2단계: 그래프 표현 방법 고르기 (막대/선, 대조군 기준선 켜고 끄기)
@@ -225,7 +270,18 @@ function renderStep2Chart(slotEl) {
       <label class="exp2-gap"><input type="checkbox" id="exp2-ctrline" ${opts.showControlLine ? "checked" : ""}> 대조군 평균 선 보이기</label>
     </div>
     <div class="exp2-chartbox"><canvas></canvas></div>
-    <p class="exp2-dim" id="exp2-note"></p>`;
+    <p class="exp2-dim" id="exp2-note"></p>
+    <div id="exp2-anno"></div>`;
+
+  // 사건 메모선 — 입력칸·목록·지우기는 공통 모듈이 맡는다.
+  // ★ 여기서 딱 한 번만 붙인다. draw() 안에서 붙이면 그래프를 다시 그릴 때마다
+  //   학생이 쓰던 메모 글이 지워진다.
+  const anno = mountAnnotations(slotEl.querySelector("#exp2-anno"), {
+    analysis,
+    onSave: saveAnalysis,
+    onChange: () => draw(), // 메모가 늘거나 줄면 그래프를 다시 그린다
+    placeholder: "예) 전등 켜기",
+  });
 
   slotEl.querySelectorAll("input[name=exp2-type]").forEach((r) =>
     r.addEventListener("change", () => {
@@ -241,7 +297,15 @@ function renderStep2Chart(slotEl) {
     draw();
   });
 
-  const draw = () => drawChart(slotEl.querySelector("canvas"), opts, slotEl.querySelector("#exp2-note"));
+  // 그래프를 누르면 그 시각에 메모선을 남길 수 있다 (선그래프에서만 — 막대에는 시간축이 없다)
+  const draw = () => {
+    const canvasEl = slotEl.querySelector("canvas");
+    if (!canvasEl) return; // 고른 측정이 없으면 캔버스가 안내 문구로 바뀌어 있다
+    drawChart(canvasEl, { ...opts, onPickTime: anno.openAt }, slotEl.querySelector("#exp2-note"));
+    if (opts.chartType !== "line") anno.close(); // 막대그래프에서는 열려 있던 입력칸을 닫는다
+    anno.refresh();
+  };
+
   draw();
 }
 
