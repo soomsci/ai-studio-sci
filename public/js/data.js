@@ -174,11 +174,15 @@ export async function saveAnalysis(analysis) {
 
 // ── 학급 정보 ───────────────────────────────────────────
 // 홈 화면의 "진행 중" 배지 등에 쓴다 (세션 A 내부용 추가 함수)
+// exists: false면 localStorage의 classId가 더 이상 없는 학급을 가리킨다는 뜻이다
+// (교사가 학급을 지웠거나, 낡은 기기에 옛 코드가 남아 있는 경우 — BUG-08).
+// 쓰기(saveDataset·saveAnalysis)는 규칙의 classExists()가 막아 permission-denied로
+// 조용히 실패하므로, index.html이 이 값을 보고 진입 전에 재입장을 안내한다.
 export async function getClassInfo() {
   if (MODE === "mock") {
-    return { name: "연습용 학급", activeExp: 1 };
+    return { name: "연습용 학급", activeExp: 1, exists: true };
   }
   const { db, f, classId } = await fs();
   const snap = await f.getDoc(f.doc(db, "classes", classId));
-  return snap.exists() ? fromDoc(snap) : { name: "", activeExp: 1 };
+  return snap.exists() ? { ...fromDoc(snap), exists: true } : { name: "", activeExp: 1, exists: false };
 }
