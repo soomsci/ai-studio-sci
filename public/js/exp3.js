@@ -1,11 +1,17 @@
 // js/exp3.js — 실험 3 "운동과 우리 몸" 탭 (세션 D)
 //
-// 화면 구성 (위 → 아래):
-//   ① 탐구 질문 헤더 + 모둠별 주제 선택(§10.3) — 주제를 고르기 전엔 아래가 안 보인다
-//   ② 실험 계획 세우기 (config의 designStepsCommon + 주제별 designStepExtra) — 다 채워야 아래가 열린다
-//   ③ 우리 모둠 측정 목록 + 연습 데이터 만들기 + 분석에 쓸 측정 고르기 (exp1과 동일 패턴)
-//   ④ 분석 5단계 (steps.js의 renderSteps) — 주제에 따라 산점도/선그래프로 갈라진다.
-//      1단계에 원본 표+CSV, s1과 s2 사이에 축 고르기 관문(g1)이 주제별로 다르게 있다.
+// 화면 구성:
+//   ① 탐구 질문 헤더 + 모둠별 주제 선택(§10.3) — phase-nav보다 앞, 화면 전체 공통.
+//      주제를 고르기 전엔 아래 세 화면 자체가 만들어지지 않는다. 주제를 바꾸면
+//      설계·분석 내용이 통째로 달라지므로(§12.2), phase-nav를 다시 만들어
+//      "1. 계획 세우기"부터 다시 보여준다 — 4번째 화면으로 넣지 않은 이유다.
+//   ② phase-nav(js/phase-nav.js)로 나눈 세 화면:
+//      "1. 계획 세우기" — designStepsCommon + 주제별 designStepExtra. 잠기지 않는다.
+//      "2. 측정하기"    — 측정 목록 + 연습 데이터 만들기.
+//      "3. 분석하기"    — 분석 5단계(steps.js). 주제에 따라 산점도/선그래프로 갈라진다.
+//      측정·분석 두 화면은 같은 조건으로 함께 잠그고 푼다(기존 applyLock과 동일):
+//      측정이 0건이고 설계가 미완이면 잠근다. ★ 측정이 하나라도 있으면 설계가
+//      미완이어도 잠그지 않는다 — 수집기로 먼저 잰 모둠이 수업 중 막히지 않게.
 //
 // 주제①(운동 강도-심박수)은 측정 1건 = 점 1개인 산점도, 주제②(회복 속도)는
 // exp1과 같은 선그래프다. 기준선 대신 "학급 평균선"을 쓰고(§10.3), 산점도에는
@@ -20,6 +26,7 @@ import { renderChart } from "./chart-kit.js";
 import { renderSteps, isStepsComplete } from "./steps.js";
 import { renderRawDataTable } from "./raw-data.js";
 import { mountAnnotations } from "./annotations.js";
+import { renderPhases } from "./phase-nav.js";
 import { getSession } from "./auth.js";
 
 // 탭이 열려 있는 동안의 상태
@@ -27,13 +34,12 @@ let rootEl = null;
 let session = null;
 let datasets = [];
 let analysis = null;
-let slots = {};   // 단계별 render 훅이 그린 자리 — 측정 선택이 바뀌면 다시 그린다
+let phaseApi = null; // renderPhases()가 돌려주는 { refresh(), goTo() } — 잠금 갱신에 쓴다
 
 // ── 탭 진입점 (router.js 규약) ─────────────────────────────
 export async function mount(containerEl) {
   rootEl = containerEl;
   session = getSession();
-  slots = {};
   injectStyle();
 
   containerEl.innerHTML = `
@@ -73,12 +79,11 @@ function renderTopicPicker(el) {
           </option>`
       ).join("")}
     </select>
-    ${current && !TOPICS.find((t) => t.id === current)?.ready ? "" : ""}
   `;
   el.querySelector("#exp3-topic-select").addEventListener("change", async (e) => {
     analysis.chartOptions.topic = e.target.value;
     await saveAnalysis(analysis);
-    await renderBody();
+    await renderBody(); // 주제가 바뀌면 phase-nav를 다시 만들어 "1. 계획 세우기"부터 보여준다
   });
 }
 
@@ -94,28 +99,95 @@ function currentTopicConfig() {
   return topic;
 }
 
-// ── ② + ③ 주제를 고른 뒤에만 보이는 본문 ─────────────────────
+// 측정 목록을 불러와 analysis.datasetIds를 지금 있는 측정으로 정리한다
+async function loadDatasets() {
+  datasets = await listDatasets(EXP3.expNo, session.groupId);
+  const ids = datasets.map((d) => d.id);
+  let picked = (analysis.datasetIds || []).filter((id) => ids.includes(id));
+  if (!picked.length) picked = [...ids];
+  analysis.datasetIds = picked;
+}
+
+// ── 주제를 고른 뒤 세 화면(phase-nav)을 만든다 ─────────────────
 async function renderBody() {
   const bodyEl = rootEl.querySelector("#exp3-body");
   const topic = currentTopicConfig();
 
   if (!topic) {
+    phaseApi = null;
     bodyEl.innerHTML = `<p class="exp3-dim">위에서 주제를 먼저 골라 주세요.</p>`;
     return;
   }
 
+  await loadDatasets();
+
   bodyEl.innerHTML = `
     <p class="exp3-question">탐구 질문: <strong>${topic.question}</strong></p>
+    <div id="exp3-phases"></div>
+  `;
 
-    <section class="exp3-box" id="exp3-design">
+  phaseApi = renderPhases(
+    bodyEl.querySelector("#exp3-phases"),
+    buildPhases(topic),
+    { storageKey: "sds:phase:exp3:" + session.groupId }
+  );
+}
+
+// 측정 화면·분석 화면을 함께 잠그고 푸는 기준 (exp1과 동일 패턴)
+// ★ 이미 잰 측정이 하나라도 있으면 잠그지 않는다 — 수집기로 먼저 잰 모둠이
+//   웹앱에서 막히면 수업이 그 자리에서 멈추기 때문이다.
+function measureLocked(topic) {
+  return datasets.length === 0 && !isStepsComplete(topic.designSteps, analysis);
+}
+
+function buildPhases(topic) {
+  const locked = () => measureLocked(topic);
+  const lockMsg = "🔒 먼저 실험 계획을 세워 보세요. 위 '1. 계획 세우기'에서 질문에 답하면 열려요.";
+  return [
+    {
+      id: "design",
+      label: "1. 계획 세우기",
+      render: (slotEl) => renderDesignPhase(slotEl, topic),
+    },
+    {
+      id: "measure",
+      label: "2. 측정하기",
+      isLocked: locked,
+      lockMsg,
+      render: (slotEl) => renderMeasurePhase(slotEl, topic),
+    },
+    {
+      id: "analyze",
+      label: "3. 분석하기",
+      isLocked: locked,
+      lockMsg,
+      render: (slotEl) => renderAnalyzePhase(slotEl, topic),
+    },
+  ];
+}
+
+// ── 화면 1: 실험 계획 세우기 ─────────────────────────────────
+function renderDesignPhase(slotEl, topic) {
+  slotEl.innerHTML = `
+    <section class="exp3-box">
       <h3>실험 계획 세우기</h3>
-      <p class="exp3-help">재기 전에 어떻게 실험할지 먼저 정해요. 다 적으면 아래 측정 화면이 열려요.</p>
+      <p class="exp3-help">재기 전에 어떻게 실험할지 먼저 정해요. 다 적으면 다음 화면(측정하기)으로 넘어갈 수 있어요.</p>
       <div id="exp3-design-steps"></div>
     </section>
+  `;
+  renderSteps(
+    slotEl.querySelector("#exp3-design-steps"),
+    topic.designSteps,
+    analysis,
+    saveAnalysis,
+    () => phaseApi?.refresh() // 다 채웠는지 바뀌면 상단 칩·다음 버튼의 잠금 표시를 다시 계산
+  );
+}
 
-    <p class="exp3-lockmsg" id="exp3-lockmsg" hidden></p>
-
-    <section class="exp3-box" id="exp3-measure">
+// ── 화면 2: 우리 모둠의 측정 ─────────────────────────────────
+function renderMeasurePhase(slotEl, topic) {
+  slotEl.innerHTML = `
+    <section class="exp3-box">
       <h3>우리 모둠의 측정</h3>
       <p class="exp3-help">분석에 쓸 측정을 골라 주세요.</p>
       <div id="exp3-list"><p class="exp3-dim">측정 목록을 불러오는 중…</p></div>
@@ -129,54 +201,15 @@ async function renderBody() {
         <span id="exp3-make-msg" class="exp3-dim"></span>
       </div>
     </section>
-
-    <section id="exp3-steps"></section>
   `;
-
-  bodyEl.querySelector("#exp3-make").addEventListener("click", () => onMakePractice(topic));
-  await reloadDatasets(topic);
+  slotEl.querySelector("#exp3-make").addEventListener("click", () => onMakePractice(topic));
+  renderDatasetList(slotEl.querySelector("#exp3-list"), topic);
 }
 
-// 측정 목록을 불러와 설계 단계 + 목록 + 분석 단계를 그린다
-async function reloadDatasets(topic) {
-  datasets = await listDatasets(EXP3.expNo, session.groupId);
-
-  const ids = datasets.map((d) => d.id);
-  let picked = (analysis.datasetIds || []).filter((id) => ids.includes(id));
-  if (!picked.length) picked = [...ids];
-  analysis.datasetIds = picked;
-
-  // 실험 계획 단계 — 다 채우면 (다섯 번째 인자로) 알려 준다
-  renderSteps(
-    rootEl.querySelector("#exp3-design-steps"),
-    topic.designSteps,
-    analysis,
-    saveAnalysis,
-    () => applyLock(topic)
-  );
-
-  renderDatasetList(rootEl.querySelector("#exp3-list"), topic);
-  renderSteps(rootEl.querySelector("#exp3-steps"), buildSteps(topic), analysis, saveAnalysis);
-  applyLock(topic); // 새로고침으로 다시 들어온 모둠도 지금 상태로 판단한다
-}
-
-// ── 계획을 세우기 전에는 측정·분석을 잠가 둔다 (exp1과 동일 패턴) ──
-// ★ 이미 잰 측정이 하나라도 있으면 잠그지 않는다 — 수집기로 먼저 잰 모둠이
-//   웹앱에서 막히면 수업이 그 자리에서 멈추기 때문이다.
-function applyLock(topic) {
-  const msgEl = rootEl.querySelector("#exp3-lockmsg");
-  if (!msgEl) return; // 주제를 바꾸는 사이에 화면이 이미 지나갔을 수 있다
-  const locked = datasets.length === 0 && !isStepsComplete(topic.designSteps, analysis);
-  msgEl.hidden = !locked;
-  msgEl.textContent = locked
-    ? "🔒 먼저 실험 계획을 세워 보세요. 위 단계를 다 적으면 아래에서 측정을 시작할 수 있어요."
-    : "";
-  for (const sel of ["#exp3-measure", "#exp3-steps"]) {
-    const el = rootEl.querySelector(sel);
-    if (!el) continue;
-    el.classList.toggle("exp3-locked", locked);
-    el.inert = locked; // 잠긴 동안은 누르기·글쓰기가 되지 않는다
-  }
+// ── 화면 3: 분석 5단계 ───────────────────────────────────────
+function renderAnalyzePhase(slotEl, topic) {
+  slotEl.innerHTML = `<section id="exp3-steps"></section>`;
+  renderSteps(slotEl.querySelector("#exp3-steps"), buildSteps(topic), analysis, saveAnalysis);
 }
 
 function pickedDatasets() {
@@ -207,7 +240,7 @@ function renderDatasetList(listEl, topic) {
         ? [...analysis.datasetIds, id]
         : analysis.datasetIds.filter((x) => x !== id);
       await saveAnalysis(analysis);
-      refreshSlots(topic); // 열려 있는 단계의 그래프·표를 새로 그린다
+      // 분석 화면은 지금 안 보이므로 다시 그릴 필요가 없다 — 나중에 넘어갈 때 새로 그려진다.
     });
   });
 }
@@ -230,28 +263,23 @@ async function onMakePractice(topic) {
   }
 }
 
+// 측정을 새로 만든 뒤 — 지금 보고 있는 측정 화면만 갱신하고, 잠금 상태를 다시 계산한다.
+// (phase-nav를 통째로 다시 만들면 "1. 계획 세우기"로 튕겨 나가므로 그렇게 하지 않는다)
+async function reloadDatasets(topic) {
+  await loadDatasets();
+  const listEl = rootEl.querySelector("#exp3-list");
+  if (listEl) renderDatasetList(listEl, topic);
+  phaseApi?.refresh();
+}
+
 // ── 분석 5단계 — 주제별 steps에 render 훅을 끼운다 ──────────
 function buildSteps(topic) {
   const hooks = { s1: renderStep1Raw, s2: renderStep2Chart, s3: renderStep3Chart };
   return topic.steps.map((step) => {
     const hook = hooks[step.id];
     if (!hook) return step; // 축 관문(g1)·4·5단계는 render 훅이 없다
-    return {
-      ...step,
-      render: (slotEl) => {
-        slots[step.id] = slotEl;
-        hook(slotEl, topic);
-      },
-    };
+    return { ...step, render: (slotEl) => hook(slotEl, topic) };
   });
-}
-
-// 측정 선택이 바뀌었을 때, 이미 그려져 있는 단계 내용을 다시 그린다
-function refreshSlots(topic) {
-  const hooks = { s1: renderStep1Raw, s2: renderStep2Chart, s3: renderStep3Chart };
-  for (const [id, el] of Object.entries(slots)) {
-    if (el.isConnected) hooks[id](el, topic);
-  }
 }
 
 // 1단계: 원본 측정값 표 + CSV (읽기 전용, raw-data.js)
@@ -487,9 +515,6 @@ function injectStyle() {
     .exp3-table th, .exp3-table td { border: 1px solid #ddd; padding: 4px 8px; text-align: left; }
     .exp3-table th { background: #f6f7f9; }
     #exp3-topic-select { font-size: 14px; padding: 4px 6px; margin-top: 6px; }
-    /* 계획을 세우기 전 잠긴 영역 — 보이되 누를 수 없다 (exp1과 동일) */
-    .exp3-locked { opacity: 0.45; filter: grayscale(0.4); }
-    .exp3-lockmsg { margin: 4px 2px; color: #b45309; font-size: 15px; }
   `;
   document.head.append(style);
 }
