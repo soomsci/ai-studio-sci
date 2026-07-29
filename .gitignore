@@ -20,3 +20,6 @@ __pycache__/
 *.pyc
 collector/dist/
 collector/build/
+
+# k12-teacher-skills 플러그인 소스 — 앱과 무관, 자체 .git 보유 (탐구 발문 수정용 개인 도구)
+k12-teacher-skills/
