@@ -1,10 +1,13 @@
 // js/exp2.js — 실험 2 "교실 식물 최적 조건 찾기" 탭 (세션 C)
 //
-// 화면 구성 (위 → 아래):
-//   ① 탐구 질문 헤더
-//   ② 실험 계획 세우기 (config의 designSteps) — 다 채워야 아래가 열린다
-//   ③ 우리 모둠 측정 목록 + 연습 데이터 만들기 + 분석에 쓸 측정 고르기
-//   ④ 분석 5단계 (steps.js의 renderSteps) — 변인 기록·축 관문·그래프·자동 계산은 render 훅으로 끼움
+// 화면 구성 — phase-nav.js(세션 A)로 세 화면을 오간다:
+//   1. 계획 세우기 (config의 designSteps)
+//   2. 측정하기 — 측정 목록 + 연습 데이터 만들기
+//   3. 분석하기 (steps.js의 renderSteps) — 변인 기록·축 관문·그래프·자동 계산은 render 훅으로 끼움
+// 측정·분석 화면은 계획을 다 채우거나(또는 측정이 이미 있으면) 열린다 — isMeasureLocked() 참고.
+// ★ 변인 기록(s1)·축 고르기 관문(g1)은 원래부터 config의 steps 배열(분석 5단계) 안에
+//   있었고, 화면을 나눠도 그 자리(분석하기 화면) 그대로 둔다 — steps.js가 이미
+//   한 단계씩 넘기는 구조라 별도 화면으로 뺄 이유가 없다 (§12.2).
 //
 // 문구·질문·그래프 설정은 전부 config/exp2.config.js에 있다.
 
@@ -14,19 +17,26 @@ import { renderChart } from "./chart-kit.js";
 import { renderSteps, isStepsComplete } from "./steps.js";
 import { renderRawDataTable } from "./raw-data.js";
 import { mountAnnotations } from "./annotations.js";
+import { renderPhases } from "./phase-nav.js";
 import { getSession } from "./auth.js";
 
 let rootEl = null;
 let session = null;
 let datasets = [];
 let analysis = null;
-let slots = {}; // 단계별 render 훅이 그린 자리 — 측정 선택이 바뀌면 다시 그린다
+let phaseApi = null;
+// 계획·분석 화면은 renderSteps를 한 번만 호출해 만든 뒤 이 안에 담아 둔다.
+// 화면을 오갈 때마다 다시 지으면 안에 열려 있던 단계 위치가 매번 1단계로 되돌아가기 때문에,
+// phase-nav가 화면을 바꿀 때는 이미 지어 둔 노드를 그 자리에 옮겨 붙이기만 한다.
+let planNode = null;
+let analyzeNode = null;
 
 // ── 탭 진입점 (router.js 규약) ─────────────────────────────
 export async function mount(containerEl) {
   rootEl = containerEl;
   session = getSession();
-  slots = {};
+  planNode = null;
+  analyzeNode = null;
   injectStyle();
 
   containerEl.innerHTML = `
@@ -34,16 +44,54 @@ export async function mount(containerEl) {
       <h2>🌱 실험 2 — ${EXP2.title}</h2>
       <p class="exp2-question">탐구 질문: <strong>${EXP2.question}</strong></p>
     </section>
+    <div id="exp2-phases"></div>
+  `;
 
-    <section class="exp2-box" id="exp2-design">
+  await reload();
+
+  phaseApi = renderPhases(containerEl.querySelector("#exp2-phases"), buildPhases(), {
+    storageKey: "sds:phase:exp2:" + session.groupId,
+  });
+}
+
+// 세 화면 정의 — 잠금 기준은 isMeasureLocked() 하나로 통일한다
+function buildPhases() {
+  const lockMsg = "🔒 먼저 실험 계획을 세워 보세요. 계획을 다 적으면 측정을 시작할 수 있어요.";
+  return [
+    { id: "plan", label: "1. 계획 세우기", render: renderPlanPhase },
+    { id: "measure", label: "2. 측정하기", isLocked: isMeasureLocked, lockMsg, render: renderMeasurePhase },
+    { id: "analyze", label: "3. 분석하기", isLocked: isMeasureLocked, lockMsg, render: renderAnalyzePhase },
+  ];
+}
+
+// ── 계획을 세우기 전에는 측정·분석을 잠가 둔다 ──────────
+// ★ 이미 잰 측정이 하나라도 있으면 잠그지 않는다. 수집기(별도 앱)로 먼저 잰
+//   모둠이 웹앱에서 막히면 수업이 그 자리에서 멈추기 때문이다.
+function isMeasureLocked() {
+  return datasets.length === 0 && !isStepsComplete(EXP2.designSteps, analysis);
+}
+
+// 1. 계획 세우기 화면
+function renderPlanPhase(slotEl) {
+  slotEl.innerHTML = `
+    <div class="exp2-box">
       <h3>실험 계획 세우기</h3>
-      <p class="exp2-help">재기 전에 어떻게 실험할지 먼저 정해요. 다 적으면 아래 측정 화면이 열려요.</p>
+      <p class="exp2-help">재기 전에 어떻게 실험할지 먼저 정해요. 다 적으면 측정 화면이 열려요.</p>
       <div id="exp2-design-steps"></div>
-    </section>
+    </div>
+  `;
+  if (!planNode) {
+    planNode = document.createElement("div");
+    // 완료 여부가 바뀌면(다 채웠을 때 등) 측정·분석 칩의 잠금 표시를 다시 계산한다
+    renderSteps(planNode, EXP2.designSteps, analysis, saveAnalysis, () => phaseApi.refresh());
+  }
+  slotEl.querySelector("#exp2-design-steps").append(planNode);
+}
 
-    <p class="exp2-lockmsg" id="exp2-lockmsg" hidden></p>
-
-    <section class="exp2-box" id="exp2-measure">
+// 2. 측정하기 화면
+function renderMeasurePhase(slotEl) {
+  slotEl.innerHTML = `
+    <div class="exp2-box">
       <h3>우리 모둠의 측정</h3>
       <p class="exp2-help">분석에 쓸 측정을 골라 주세요. 같은 조건을 여러 번 쟀다면 모두 골라 평균을 낼 수 있어요.</p>
       <div id="exp2-list"><p class="exp2-dim">측정 목록을 불러오는 중…</p></div>
@@ -56,16 +104,22 @@ export async function mount(containerEl) {
         <button id="exp2-make">연습 데이터 만들기</button>
         <span id="exp2-make-msg" class="exp2-dim"></span>
       </div>
-    </section>
-
-    <section id="exp2-steps"></section>
+    </div>
   `;
-
-  containerEl.querySelector("#exp2-make").addEventListener("click", onMakePractice);
-  await reload();
+  renderDatasetList(slotEl.querySelector("#exp2-list"));
+  slotEl.querySelector("#exp2-make").addEventListener("click", onMakePractice);
 }
 
-// 측정 목록과 분석 문서를 불러와 화면을 채운다
+// 3. 분석하기 화면
+function renderAnalyzePhase(slotEl) {
+  if (!analyzeNode) {
+    analyzeNode = document.createElement("div");
+    renderSteps(analyzeNode, buildSteps(), analysis, saveAnalysis);
+  }
+  slotEl.append(analyzeNode);
+}
+
+// 측정 목록과 분석 문서를 불러온다 (화면을 그리는 일은 각 phase의 render가 한다)
 async function reload() {
   [datasets, analysis] = await Promise.all([
     listDatasets(EXP2.expNo, session.groupId),
@@ -88,36 +142,9 @@ async function reload() {
   if (!picked.length) picked = [...ids];
   analysis.datasetIds = picked;
 
-  // 실험 계획 단계 — 다 채우면 (다섯 번째 인자로) 알려 준다
-  renderSteps(
-    rootEl.querySelector("#exp2-design-steps"),
-    EXP2.designSteps,
-    analysis,
-    saveAnalysis,
-    () => applyLock()
-  );
-
-  renderDatasetList(rootEl.querySelector("#exp2-list"));
-  renderSteps(rootEl.querySelector("#exp2-steps"), buildSteps(), analysis, saveAnalysis);
-  applyLock(); // 새로고침으로 다시 들어온 모둠도 지금 상태로 판단한다
-}
-
-// ── ⑤ 계획을 세우기 전에는 측정·분석을 잠가 둔다 ──────────
-// 감추지는 않는다. 무엇이 기다리는지는 보이되 아직 누를 수 없는 상태로 둔다.
-// ★ 이미 잰 측정이 하나라도 있으면 잠그지 않는다. 수집기(별도 앱)로 먼저 잰
-//   모둠이 웹앱에서 막히면 수업이 그 자리에서 멈추기 때문이다.
-function applyLock() {
-  const locked = datasets.length === 0 && !isStepsComplete(EXP2.designSteps, analysis);
-  const msgEl = rootEl.querySelector("#exp2-lockmsg");
-  msgEl.hidden = !locked;
-  msgEl.textContent = locked
-    ? "🔒 먼저 실험 계획을 세워 보세요. 위 세 단계를 다 적으면 아래에서 측정을 시작할 수 있어요."
-    : "";
-  for (const sel of ["#exp2-measure", "#exp2-steps"]) {
-    const el = rootEl.querySelector(sel);
-    el.classList.toggle("exp2-locked", locked);
-    el.inert = locked; // 잠긴 동안은 누르기·글쓰기가 되지 않는다
-  }
+  // analysis를 새로 받아 왔으니 계획·분석 화면도 다시 지어야 한다
+  planNode = null;
+  analyzeNode = null;
 }
 
 // 지금 분석에 골라 둔 측정들
@@ -161,7 +188,7 @@ function renderDatasetList(listEl) {
         ? [...analysis.datasetIds, id]
         : analysis.datasetIds.filter((x) => x !== id);
       saveAnalysis(analysis);
-      refreshSlots(); // 열려 있는 단계의 내용을 새로 그린다
+      analyzeNode = null; // 고른 측정이 바뀌었으니 분석 화면은 다음에 열 때 새로 짓는다
     });
   });
 }
@@ -177,8 +204,8 @@ async function onMakePractice() {
     const ds = generateMock(EXP2.expNo, cond);
     ds.groupId = session.groupId;
     await saveDataset(ds);
-    msgEl.textContent = "";
     await reload();
+    phaseApi.goTo("measure"); // 목록·잠금 표시를 새 데이터 기준으로 다시 그린다
   } catch (e) {
     console.error(e);
     msgEl.textContent = "연습 데이터를 만들지 못했어요. 선생님께 알려 주세요.";
@@ -186,27 +213,14 @@ async function onMakePractice() {
 }
 
 // ── ③ 분석 5단계 — config의 steps에 render 훅을 끼운다 ────
+// 측정 선택이 바뀌면 analyzeNode를 통째로 다시 짓기 때문에(위 checkbox 핸들러 참고),
+// 여기서는 훅을 그대로 이어 붙이기만 하면 된다.
 function buildSteps() {
   const hooks = { s1: renderStep1Vars, s2: renderStep2Chart, s3: renderStep3Chart };
   return EXP2.steps.map((step) => {
     const hook = hooks[step.id];
-    if (!hook) return step; // 4·5단계는 글로만 답한다
-    return {
-      ...step,
-      render: (slotEl) => {
-        slots[step.id] = slotEl;
-        hook(slotEl);
-      },
-    };
+    return hook ? { ...step, render: hook } : step; // 4·5단계는 글로만 답한다
   });
-}
-
-// 측정 선택이 바뀌었을 때, 이미 그려져 있는 단계 내용을 다시 그린다
-function refreshSlots() {
-  const hooks = { s1: renderStep1Vars, s2: renderStep2Chart, s3: renderStep3Chart };
-  for (const [id, el] of Object.entries(slots)) {
-    if (el.isConnected) hooks[id](el);
-  }
 }
 
 // 1단계: 변인 기록 UI + 조건별 반복 횟수 표
@@ -466,9 +480,7 @@ function injectStyle() {
     .exp2-table { border-collapse: collapse; font-size: 14px; margin: 8px 0; width: 100%; }
     .exp2-table th, .exp2-table td { border: 1px solid #ddd; padding: 4px 8px; text-align: left; }
     .exp2-table th { background: #f6f7f9; }
-    /* 계획을 세우기 전 잠긴 영역 — 보이되 누를 수 없다 */
-    .exp2-locked { opacity: 0.45; filter: grayscale(0.4); }
-    .exp2-lockmsg { margin: 4px 2px; color: #b45309; font-size: 15px; }
+    /* 잠금 표시(칩·안내문)는 phase-nav.js와 style.css의 .phase-* 규칙이 맡는다 */
     /* 사건 메모선 입력칸·목록 스타일은 js/annotations.js가 직접 넣는다 */
   `;
   document.head.append(style);
