@@ -286,11 +286,15 @@ export function renderSteps(containerEl, stepConfig, analysis, onSave, onComplet
     prev.disabled = current === 0;
     prev.addEventListener("click", () => { current -= 1; render(); });
 
-    const next = el("button", "btn", current === stepConfig.length - 1 ? "분석 끝! 🎉" : "다음 단계 →");
+    const isLast = current === stepConfig.length - 1;
+    const next = el("button", "btn", isLast ? "분석 끝! 🎉" : "다음 단계 →");
     next.type = "button";
-    next.disabled = current === stepConfig.length - 1;
     // 답이 비어도 다음으로 갈 수 있다 — 강제하지 않는다 (SPEC §8.4)
-    next.addEventListener("click", () => { current += 1; render(); });
+    next.addEventListener("click", () => {
+      if (isLast) { saveNow(); return; } // 마지막 단계: 더 넘어갈 곳이 없으니 저장만 확실히 한다
+      current += 1;
+      render();
+    });
 
     foot.append(prev, next);
     return foot;
