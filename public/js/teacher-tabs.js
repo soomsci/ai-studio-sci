@@ -7,15 +7,36 @@
 import { MODE } from "./data.js";
 import { renderChart } from "./chart-kit.js";
 import {
-  fetchClassDatasets, fetchAnalysis, deleteDatasetDoc,
+  fetchClassDatasets, fetchAnalysis, fetchAllAnalyses, deleteDatasetDoc,
   setActiveExpField, setVisibleExpsField, getVisibleExps,
 } from "./teacher-data.js";
 
 const TOTAL_STEPS = 5; // §8 분석 단계는 5단계
 const EXP_LABELS = { 1: "환기 주기", 2: "식물 광합성", 3: "운동과 몸", 4: "비열(물·식용유)" };
+const EXP_NUMS = Object.keys(EXP_LABELS).map(Number); // [1,2,3,4] — 하드코딩 대신 여기서 파생
 
 function groupLabel(groupId) {
   return (groupId || "").replace(/^g/, "") + "모둠";
+}
+
+// ── 탭 간 측정 목록 캐시 ──────────────────────────────────
+// 학급 하나를 보는 동안 progress·chart·manage 탭이 같은 fetchClassDatasets(classId, expNo)를
+// 중복 호출하지 않도록 여기서 한 번만 받아 나눠 쓴다. 학급을 바꾸면 자동으로 비워진다.
+// 실시간 뷰(TV)는 라이브 갱신이 목적이라 이 캐시를 쓰지 않는다(아래 openTvView 참고).
+let cachedClassId = null;
+let datasetsCache = new Map(); // expNo -> Promise<datasets>
+
+function getDatasets(classId, expNo) {
+  if (cachedClassId !== classId) {
+    datasetsCache.clear();
+    cachedClassId = classId;
+  }
+  if (!datasetsCache.has(expNo)) datasetsCache.set(expNo, fetchClassDatasets(classId, expNo));
+  return datasetsCache.get(expNo);
+}
+
+function invalidateDatasetsCache() {
+  datasetsCache.clear();
 }
 
 function notice(text) {
@@ -36,14 +57,20 @@ export async function renderProgressTab(cls) {
   loading.textContent = "불러오는 중…";
   el.append(loading);
 
-  const perExp = await Promise.all([1, 2, 3].map(async (expNo) => {
-    const datasets = await fetchClassDatasets(cls.id, expNo);
+  // 분석 문서는 모둠×실험마다 따로 읽지 않고 classes/{classId}/analyses 컬렉션을 한 번에 읽는다.
+  // 연습 모드는 컬렉션 조회가 없어 null이 오고, 그때는 기존처럼 건별로 fetchAnalysis를 쓴다.
+  const allAnalyses = await fetchAllAnalyses(cls.id);
+
+  const perExp = await Promise.all(EXP_NUMS.map(async (expNo) => {
+    const datasets = await getDatasets(cls.id, expNo);
     const groupIds = [...new Set(datasets.map((d) => d.groupId))];
     const counts = {};
     datasets.forEach((d) => { counts[d.groupId] = (counts[d.groupId] || 0) + 1; });
     const analyses = {};
     await Promise.all(groupIds.map(async (gid) => {
-      analyses[gid] = await fetchAnalysis(cls.id, expNo, gid);
+      analyses[gid] = allAnalyses
+        ? (allAnalyses[`exp${expNo}_${gid}`] || { answers: {}, conclusion: "" })
+        : await fetchAnalysis(cls.id, expNo, gid);
     }));
     return { expNo, groupIds, counts, analyses };
   }));
@@ -62,10 +89,10 @@ export async function renderProgressTab(cls) {
     <thead>
       <tr>
         <th rowspan="2">모둠</th>
-        ${[1, 2, 3].map((n) => `<th colspan="3">실험 ${n} · ${EXP_LABELS[n]}</th>`).join("")}
+        ${EXP_NUMS.map((n) => `<th colspan="3">실험 ${n} · ${EXP_LABELS[n]}</th>`).join("")}
       </tr>
       <tr>
-        ${[1, 2, 3].map(() => `<th>측정</th><th>진도</th><th>결론</th>`).join("")}
+        ${EXP_NUMS.map(() => `<th>측정</th><th>진도</th><th>결론</th>`).join("")}
       </tr>
     </thead>
     <tbody></tbody>
@@ -121,7 +148,7 @@ export async function renderChartTab(cls) {
   const select = toolbar.querySelector("#chart-exp-select");
   const draw = async () => {
     const expNo = Number(select.value);
-    const datasets = await fetchClassDatasets(cls.id, expNo);
+    const datasets = await getDatasets(cls.id, expNo);
     if (datasets.length === 0) {
       chartWrap.innerHTML = `<p style="color:var(--dim)">아직 이 실험에 측정된 데이터가 없어요.</p>`;
       return;
@@ -159,7 +186,7 @@ export async function renderManageTab(cls) {
   const activeBox = document.createElement("div");
   activeBox.className = "th-toolbar";
   activeBox.innerHTML = `<label>지금 진행 중인 실험</label>`;
-  [1, 2, 3].forEach((n) => {
+  EXP_NUMS.forEach((n) => {
     const btn = document.createElement("button");
     btn.className = "btn small" + (cls.activeExp === n ? "" : " ghost");
     btn.textContent = `실험 ${n}로 전환`;
@@ -210,7 +237,7 @@ export async function renderManageTab(cls) {
   const tbody = table.querySelector("tbody");
   el.append(table);
 
-  const all = (await Promise.all([1, 2, 3].map((n) => fetchClassDatasets(cls.id, n)))).flat();
+  const all = (await Promise.all(EXP_NUMS.map((n) => getDatasets(cls.id, n)))).flat();
   if (all.length === 0) {
     tbody.innerHTML = `<tr><td colspan="6">아직 측정된 데이터가 없어요.</td></tr>`;
     return;
@@ -229,6 +256,7 @@ export async function renderManageTab(cls) {
     tr.querySelector("button").addEventListener("click", async () => {
       if (!confirm("이 측정을 지울까요? 되돌릴 수 없어요.")) return;
       await deleteDatasetDoc(cls.id, d.id);
+      invalidateDatasetsCache(); // 지운 직후 옛 목록이 다른 탭에 남지 않게 비운다
       tr.remove();
     });
     tbody.append(tr);

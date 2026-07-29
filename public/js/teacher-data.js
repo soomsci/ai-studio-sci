@@ -91,6 +91,19 @@ export async function fetchAnalysis(classId, expNo, groupId) {
   return snap.exists() ? snap.data() : { answers: {}, conclusion: "" };
 }
 
+// classes/{classId}/analyses 컬렉션을 한 번에 읽어 문서 id("exp{번호}_{모둠}")를 키로 돌려준다.
+// 모둠 여러 개 × 실험 여러 개를 fetchAnalysis로 하나씩 읽는 대신 이걸로 한 번에 대체한다.
+// firestore.rules가 이 컬렉션의 목록 읽기를 허용한다(allow read: if signedIn()).
+// 연습 모드는 이런 컬렉션 조회가 없어 null을 돌려주고, 호출부는 그때 fetchAnalysis로 되돌아간다.
+export async function fetchAllAnalyses(classId) {
+  if (MODE === "mock") return null;
+  const { db, f } = await fsCtx();
+  const snap = await f.getDocs(f.collection(db, "classes", classId, "analyses"));
+  const byId = {};
+  snap.docs.forEach((d) => { byId[d.id] = d.data(); });
+  return byId;
+}
+
 export async function deleteDatasetDoc(classId, datasetId) {
   if (MODE === "mock") return; // 연습 모드는 실제로 지우지 않는다
   const { db, f } = await fsCtx();
