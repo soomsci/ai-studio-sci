@@ -1,6 +1,76 @@
 # 진행 상황 (세션 G 점검)
 
-마지막 점검: 2026-07-29 (13회차) · **개학(8월 14일)까지 D-16** · SPEC 기준 v2.8
+마지막 점검: 2026-07-30 (14회차) · **개학(8월 14일)까지 D-15** · SPEC 기준 v2.8
+
+## 🔴 14회차 (2026-07-30) — 세션 O 결과 검증. 머지 보류(회귀 1건)
+
+세션 O가 작업을 마쳤다고 알려와 `optimize/1` 브랜치(main과 분리, 커밋 5개)를 점검했다.
+
+**검증 방법:** 18개 변경 파일 전부 `node --check` 문법 검사, O가 추가한 `tests/test_calc.mjs` 실행,
+`collector/`의 기존 테스트 16개(`test_uploader_validation`·`test_measurement_lifecycle`·`test_sensor_reliability`)
+실행, 죽은 export로 정리한 항목(`MAX_POINTS`·`validateDatasetPoints`·`DEFAULT_VISIBLE_EXPS`·
+`topics`·`exportChartImage`·`downloadDatasetsCSV`)이 실제로 다른 곳에서 안 쓰이는지 grep 대조,
+`injectStyle` 제거분이 `style.css`로 실제로 옮겨졌는지 클래스명 대조, `steps.js`의 BUG-10 수정이
+리팩터 후에도 살아있는지 확인.
+
+**문제없음:**
+- `js/calc.js`·`js/measure-panel.js`·`js/dom.js` 신설 — exp1~4가 정확히 import해서 씀(통합 지점 확인)
+- `injectStyle` 4벌 제거 → `style.css`로 통합, 클래스명 실제 이전 확인
+- 죽은 export 6종 정리 — 다른 곳에서 쓰지 않는 것 grep으로 확인, 안전
+- `phase-nav.js`·`annotations.js`·`raw-data.js`의 `el()`/`elem()` 중복 → `dom.js`로 통합, 동작 변화 없음(기계적 치환)
+- `steps.js` BUG-10 수정분 보존 확인
+
+**🔴 회귀 발견 — `collector/uploader.py` (커밋 `550ab1c` "죽은 CLI와 도달 불가 래퍼 제거"):**
+
+`--dry-run` 명령줄 진입점(`main()`·`argparse`·`dry_run()`·`_mock_dataset()`·
+`if __name__=="__main__"`)을 통째로 지웠다. 실제로 실행해 확인함:
+```
+$ python3 collector/uploader.py --dry-run
+(아무 출력 없이 종료 — CLI가 완전히 무력화됨)
+```
+이 절 아래 "2026-07-28 디스패치" 세션 F 프롬프트 두 곳(각 문단 "--dry-run은 네트워크 없이
+계속 동작해야 한다")에 명시된 요구사항 위반이다. 정적 분석("다른 코드가 main()을 안 부른다")만으로
+죽은 코드라 판단한 것으로 보이는데, 이건 사람이 터미널에서 직접 부르는 진입점이라 판단 근거 자체가
+틀렸다. 기존 테스트 16개는 전부 통과하는데,애초에 CLI를 검증하는 테스트가 없었을 뿐이다(구멍이 안 걸림).
+부수적으로 `requests` import가 지연 임포트에서 파일 최상단으로 옮겨져, `requests` 미설치 환경에서
+검증 전용으로 `import uploader`만 해도 예전의 안내 문구 없이 바로 죽는다(영향은 작음 — `requirements.txt`에
+이미 필수 의존성으로 있음).
+
+**결정(2026-07-30, 사용자):** 직접 고치지 않고 세션 F에게 돌려보낸다. 아래 프롬프트를 세션 F 창에 붙여넣을 것.
+**`optimize/1`은 이 항목이 해결되기 전까지 `main`에 머지하지 않는다.**
+
+━━━ 세션 F 창에 붙여넣기 ━━━
+
+```
+CLAUDE.md의 "작업 방식 — 토큰·비용 절약"을 지켜라.
+
+세션 O가 최적화 작업 중(optimize/1 브랜치 커밋 550ab1c, "uploader.py의 죽은 CLI와 도달
+불가 래퍼 제거") collector/uploader.py의 --dry-run 명령줄 진입점을 통째로 지웠다.
+지워진 것: main(), dry_run(), _mock_dataset(), argparse import, 파일 맨 끝의
+`if __name__ == "__main__": main()`. 그 결과 `python3 uploader.py --dry-run`이
+아무것도 안 하고 그냥 끝난다(실제로 실행해서 확인함).
+
+이 명령은 죽은 코드가 아니라 사람이 터미널에서 직접 부르는 진입점이다.
+docs/PROGRESS.md의 "2026-07-28 디스패치" 세션 F 프롬프트 두 곳에 "--dry-run은
+네트워크 없이 계속 동작해야 한다"고 명시돼 있다(센서 없이 개발하는 동안 Firestore
+쓰기 스키마를 검증하는 유일한 수단). optimize/1을 main에 합치기 전에 복원해야 한다.
+
+할 일:
+1. optimize/1 브랜치에서 작업해라(git checkout optimize/1).
+2. collector/uploader.py에서 main()/dry_run()/_mock_dataset()/argparse/
+   `if __name__=="__main__"` 블록을 되살려라. `git show main:collector/uploader.py`로
+   커밋 550ab1c 이전(main 브랜치) 원래 코드를 볼 수 있다.
+3. requests import는 O가 파일 최상단으로 옮겨 둔 채로 둬도 된다(그 자체는 문제가
+   아니었다). 예전의 지연 임포트(_requests_module())로 되돌릴지는 네가 판단해라.
+4. python3 uploader.py --dry-run을 실제로 실행해서 mock 데이터 스키마 검증 출력이
+   다시 나오는지 확인해라.
+5. 기존 테스트(collector/test_uploader_validation.py 등)가 여전히 통과하는지 확인해라.
+
+담당 파일: collector/uploader.py만 수정해라. optimize/1의 다른 파일(exp1~4.js,
+calc.js, measure-panel.js, style.css 등)은 이미 세션 G가 검증했으니 건드리지 마라.
+
+끝나면 "세션 F: ..."로 optimize/1 브랜치에 커밋해라.
+```
 
 ## 🟠 12회차 (2026-07-29) — 전체 코드 최적화 검토 (사용자 요청)
 
