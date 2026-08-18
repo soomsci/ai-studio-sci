@@ -16,18 +16,31 @@ import time
 import threading
 
 # ── pasco가 실시간 연결로 공식 지원하는 센서 (부록 A: PASCO Python 라이브러리) ──
-# measurement 값은 pasco 공개 문서에 정확한 문자열이 나와 있지 않다.
-# 실제 센서 연결 후 device.get_measurement_list()로 확인해서 맞춰야 한다.
-# → 센서 입수 후 테스트 필요.
+# 2026-08-18 실물 센서(CO2·조도·압력)로 확인 완료 — get_measurement_list()가
+# 돌려주는 실제 문자열은 스캔용 이름(딕셔너리 키)과 다르다:
+#   CO2      → "CO2Concentration" (다른 값 아님, "CO2" 아님)
+#   Light    → "Illuminance"      (여러 채널 중 조도값. UVA/UVB/White/R/G/B도 있음)
+#   Pressure → "Pressure"         (원래 코드에 항목 자체가 없었음)
+# 키(딕셔너리 최상위 이름)는 scan()에 넘기는 BLE 기기 이름 필터라 그대로 둔다 — 실측으로
+# "CO2 871-101>K8", "Light 671-389>68", "Pressure 626-370>38"에 정확히 매칭됨을 확인했다.
+# Temperature·Current·Voltage는 이번에 실물이 없어 미검증 상태로 남는다.
 PASCO_SENSORS = {
-    "CO2": {"measurement": "CO2", "unit": "ppm"},
-    "Temperature": {"measurement": "Temperature", "unit": "℃"},
-    "Light": {"measurement": "Light", "unit": "lx"},
-    "Current": {"measurement": "Current", "unit": "A"},
-    "Voltage": {"measurement": "Voltage", "unit": "V"},
+    "CO2": {"measurement": "CO2Concentration", "unit": "ppm"},
+    "Temperature": {"measurement": "Temperature", "unit": "℃"},  # ⚠ 미검증
+    "Light": {"measurement": "Illuminance", "unit": "lux"},
+    "Pressure": {"measurement": "Pressure", "unit": "psi"},
+    "Current": {"measurement": "Current", "unit": "A"},  # ⚠ 미검증
+    "Voltage": {"measurement": "Voltage", "unit": "V"},  # ⚠ 미검증
 }
 
-# pasco 공식 지원 목록에 없는 센서 — 수동 입력/CSV 경로만 제공한다 (CLAUDE.md 전제 2).
+# pasco 라이브러리가 BLE로 검색하는 기기 종류 목록(_compatible_devices)에 없는 센서 —
+# 수동 입력/CSV 경로만 제공한다 (CLAUDE.md 전제 2).
+# HeartRate: 2026-08-18 실물로 재확인 — 학교에 온 것은 PASCO 제품이 아니라 Polar H9
+# (표준 블루투스 심박수 프로필 사용, PASCO 프로토콜과 무관해 pasco로는 연결 자체가
+# 불가능하다). bleak로 표준 프로필 직접 연결도 시도해 서비스(0x180D)까지는 확인했지만,
+# 이 모델은 손으로 계속 접촉해야 광고(advertise)가 유지되는 악력형이라 macOS
+# CoreBluetooth의 GATT 연결 절차보다 접촉 유지 시간이 짧아 매번 연결 중 끊긴다.
+# 실시간 연결은 이 센서로는 신뢰할 수 없다 — 수동 입력이 맞는 선택이다.
 MANUAL_ONLY_SENSORS = {
     "HeartRate": "bpm",
     "VitalCapacity": "mL",
@@ -102,9 +115,9 @@ def scan_sensors(sensor_name: str) -> list[dict]:
     반드시 번호(deviceId)를 함께 돌려주고, 학생이 자기 센서 몸통의 번호와
     맞춰 골라야 한다.
 
-    ⚠ 센서 입수 후 실제 검색 테스트 필요 — 아래 scan() 호출부는 PASCO 공개
-    API·설치된 pasco 0.3.65 소스로 확인했지만, 실물 블루투스 스캔 자체는
-    하드웨어 없이는 검증할 수 없다.
+    2026-08-18 실물 CO2·조도·압력 센서로 이 함수 자체(scan_sensors)를 그대로 호출해
+    확인했다 — 빈 결과 시 재검색, deviceId 파싱("CO2 871-101>K8" → "871-101")까지
+    실제 기기명으로 검증됨.
     """
     if sensor_name not in PASCO_SENSORS:
         raise ValueError(f"pasco로 검색할 수 없는 센서입니다: {sensor_name}")
@@ -138,10 +151,10 @@ def scan_sensors(sensor_name: str) -> list[dict]:
 class PascoSensorSource:
     """pasco 라이브러리로 실시간 연결되는 센서.
 
-    메서드 이름·시그니처(scan/connect/connect_by_id/read_data/disconnect 등)는
-    설치된 pasco 0.3.65의 실제 클래스로 대조 확인했다. 다만 **블루투스로 실제
-    센서를 찾아 연결하는 동작 자체**는 하드웨어 없이는 확인할 수 없다.
-    → 센서 입수 후 실제 연결 테스트 필요.
+    2026-08-18 실물 CO2 센서로 scan_sensors()→connect()→start()→display_points()→
+    stop()→disconnect() 전체 흐름을 이 클래스 그대로 돌려 확인했다(758ppm, 1초
+    간격 정상 수신, stop() 시 버킷 평균까지 정상). 조도·압력은 pasco 라이브러리
+    호출부만 별도로 확인(같은 API를 그대로 감싸고 있어 결과는 동일하게 본다).
     """
 
     def __init__(self, sensor_name: str):
@@ -163,7 +176,7 @@ class PascoSensorSource:
 
     def connect(self, device_id: str) -> None:
         """센서 번호(예: "117-880", 센서 몸통에 인쇄된 번호)로 정확히 지정해 연결한다.
-        ⚠ 센서 입수 후 실제 연결 테스트 필요.
+        2026-08-18 실물 CO2 센서(번호 871-101)로 확인 완료.
 
         스캔 결과 중 첫 번째(found[0])를 그냥 연결하는 방식은 쓰지 않는다 — 같은 스캔을
         두 번 돌리면 순서가 뒤집힐 수 있어서, 여러 센서를 동시에 쓸 때(예: 물·식용유
@@ -264,7 +277,7 @@ class PascoSensorSource:
         consecutive_errors = 0
         while not self._stop_flag.is_set():
             try:
-                value = self._device.read_data(self.measurement)  # ⚠ 센서 입수 후 테스트 필요
+                value = self._device.read_data(self.measurement)  # 2026-08-18 실물 CO2로 확인
             except (
                 self._device.CommunicationError,
                 self._device.MeasurementNotFound,
@@ -351,7 +364,7 @@ class PascoSensorSource:
         if self._thread and self._thread.is_alive():
             self.stop()
         if self._device:
-            self._device.disconnect()  # ⚠ 센서 입수 후 테스트 필요
+            self._device.disconnect()  # 2026-08-18 실물 CO2로 확인
             self._device = None
 
 

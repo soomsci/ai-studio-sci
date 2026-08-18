@@ -89,6 +89,15 @@ class SensorReliabilityTest(unittest.TestCase):
         self.assertIsNotNone(source._thread)
         self.assertIn("응답이 멈춰", source.fatal_error)
 
+    def test_pasco_sensors_measurement_names_match_hardware(self) -> None:
+        """2026-08-18 실물 CO2·조도·압력 센서로 get_measurement_list()를 확인한 값.
+        여기서 어긋나면 read_data()가 MeasurementNotFound로 조용히 죽는다."""
+        self.assertEqual(sensor.PASCO_SENSORS["CO2"]["measurement"], "CO2Concentration")
+        self.assertEqual(sensor.PASCO_SENSORS["Light"]["measurement"], "Illuminance")
+        self.assertIn("Pressure", sensor.PASCO_SENSORS)
+        self.assertEqual(sensor.PASCO_SENSORS["Pressure"]["measurement"], "Pressure")
+        self.assertEqual(sensor.PASCO_SENSORS["Pressure"]["unit"], "psi")
+
 
 if __name__ == "__main__":
     unittest.main()
