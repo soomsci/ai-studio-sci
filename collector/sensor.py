@@ -1,15 +1,19 @@
 # sensor.py — 센서 연결·측정 (세션 F)
 #
-# 두 경로를 제공한다 (§11 세션 F):
-#   - PascoSensorSource : pasco 라이브러리로 실시간 블루투스 연결 (CO2·온도·조도·전류·전압)
-#   - ManualInputSource : pasco 공식 지원 목록에 없는 센서(심박수·폐활량)를 위한
-#                         수동 입력 / CSV 업로드 대안 경로
+# 세 경로를 제공한다 (§11 세션 F):
+#   - PascoSensorSource        : pasco 라이브러리로 실시간 블루투스 연결 (CO2·온도·조도·압력·전류·전압)
+#   - StandardBleHeartRateSource : 표준 블루투스 심박수 프로필(0x180D)로 실시간 연결.
+#                         PASCO 제품이 아닌 심박수 밴드(Polar 등)가 이 경로를 쓴다.
+#   - ManualInputSource : 위 두 경로 다 안 되는 상황(연결 불안정 등)을 위한
+#                         수동 입력 / CSV 업로드 대안 경로. 심박수·폐활량은
+#                         이 경로도 함께 제공해 교실에서 블루투스가 말썽이면 바로 전환할 수 있게 한다.
 #
-# 두 클래스 모두 start()/record_event()/stop()을 제공해 main.py에서
+# 세 클래스 모두 start()/record_event()/stop()을 제공해 main.py에서
 # 같은 방식으로 다룰 수 있다. 반환값은 항상 §5 points/events 형태를 따른다.
 
 from __future__ import annotations
 
+import asyncio
 import csv
 import io
 import time
@@ -33,14 +37,19 @@ PASCO_SENSORS = {
     "Voltage": {"measurement": "Voltage", "unit": "V"},  # ⚠ 미검증
 }
 
-# pasco 라이브러리가 BLE로 검색하는 기기 종류 목록(_compatible_devices)에 없는 센서 —
-# 수동 입력/CSV 경로만 제공한다 (CLAUDE.md 전제 2).
-# HeartRate: 2026-08-18 실물로 재확인 — 학교에 온 것은 PASCO 제품이 아니라 Polar H9
-# (표준 블루투스 심박수 프로필 사용, PASCO 프로토콜과 무관해 pasco로는 연결 자체가
-# 불가능하다). bleak로 표준 프로필 직접 연결도 시도해 서비스(0x180D)까지는 확인했지만,
-# 이 모델은 손으로 계속 접촉해야 광고(advertise)가 유지되는 악력형이라 macOS
-# CoreBluetooth의 GATT 연결 절차보다 접촉 유지 시간이 짧아 매번 연결 중 끊긴다.
-# 실시간 연결은 이 센서로는 신뢰할 수 없다 — 수동 입력이 맞는 선택이다.
+# ── pasco가 아니라 표준 블루투스 프로필로 실시간 연결하는 센서 ──
+# 심박수는 PASCO 전용 목록(_compatible_devices)에 없지만, 학교에 온 실물은 Polar H9로
+# "표준 블루투스 심박수 서비스"(GATT 0x180D, 대부분의 심박수 밴드가 따르는 공개 규격)를
+# 쓴다. pasco 라이브러리를 거치지 않고 bleak로 직접 그 서비스에 붙는다.
+# 2026-08-18 Polar H9 실물로 확인: 연결 직후 15초간 83~84bpm 안정 수신.
+# ⚠ 접촉이 끊기면(악력형 특성상) 연결 자체가 실패할 수 있다 — 이땐 아래
+# MANUAL_ONLY_SENSORS의 수동 입력으로 바로 전환할 수 있게 두 경로를 다 남겨 둔다.
+STANDARD_BLE_SENSORS = {
+    "HeartRate": {"unit": "bpm"},
+}
+
+# 실시간 연결(PASCO든 표준 BLE든)이 교실 환경에서 불안정할 때의 대안 —
+# 수동 입력/CSV 경로 (CLAUDE.md 전제 2).
 MANUAL_ONLY_SENSORS = {
     "HeartRate": "bpm",
     "VitalCapacity": "mL",
@@ -48,9 +57,13 @@ MANUAL_ONLY_SENSORS = {
 
 
 def available_sensors() -> dict:
-    """main.py 화면에서 센서 선택 목록을 만들 때 쓴다."""
+    """main.py 화면에서 센서 선택 목록을 만들 때 쓴다.
+    HeartRate는 realtime·manual_only 둘 다에 나온다 — 표준 BLE 연결이 교실에서
+    불안정하면 학생이 바로 수동 입력으로 바꿀 수 있어야 한다."""
+    realtime = [{"name": k, "unit": v["unit"]} for k, v in PASCO_SENSORS.items()]
+    realtime += [{"name": k, "unit": v["unit"]} for k, v in STANDARD_BLE_SENSORS.items()]
     return {
-        "realtime": [{"name": k, "unit": v["unit"]} for k, v in PASCO_SENSORS.items()],
+        "realtime": realtime,
         "manual_only": [{"name": k, "unit": v} for k, v in MANUAL_ONLY_SENSORS.items()],
     }
 
@@ -366,6 +379,267 @@ class PascoSensorSource:
         if self._device:
             self._device.disconnect()  # 2026-08-18 실물 CO2로 확인
             self._device = None
+
+
+# ── 표준 블루투스 심박수 프로필(0x180D) ──
+_HR_SERVICE_UUID = "0000180d-0000-1000-8000-00805f9b34fb"
+_HR_MEASUREMENT_UUID = "00002a37-0000-1000-8000-00805f9b34fb"
+
+# scan_standard_ble_heart_rate()가 찾은 bleak BLEDevice를 번호로 잠깐 기억해 둔다.
+# PascoSensorSource의 _scan_cache와 같은 이유 — connect() 시점에 재스캔을 건너뛴다.
+_hr_scan_cache: dict[str, object] = {}
+
+# bleak(표준 BLE) 작업 전용 이벤트 루프를 프로세스 전체에서 하나만 계속 돌린다.
+# 2026-08-18 실물 테스트에서 스캔용 루프 따로, 연결용 루프 따로 만들었다가
+# "Future attached to a different loop" 오류로 연결이 실패했다 — macOS
+# CoreBluetooth는 스캔에서 연결까지 같은 이벤트 루프를 써야 한다(bleak 자체의
+# 제약, pasco와는 무관). scan_standard_ble_heart_rate()와
+# StandardBleHeartRateSource가 이 루프 하나를 함께 쓴다.
+_hr_loop: asyncio.AbstractEventLoop | None = None
+_hr_loop_thread: threading.Thread | None = None
+_hr_loop_lock = threading.Lock()
+
+
+def _get_hr_loop() -> asyncio.AbstractEventLoop:
+    global _hr_loop, _hr_loop_thread
+    with _hr_loop_lock:
+        if _hr_loop is None or _hr_loop.is_closed():
+            _hr_loop = asyncio.new_event_loop()
+            _hr_loop_thread = threading.Thread(target=_hr_loop.run_forever, daemon=True)
+            _hr_loop_thread.start()
+        return _hr_loop
+
+
+def _run_hr_coro(coro, timeout: float = 20.0):
+    loop = _get_hr_loop()
+    future = asyncio.run_coroutine_threadsafe(coro, loop)
+    return future.result(timeout=timeout)
+
+
+def _hr_device_id_from_name(name: str | None) -> str | None:
+    """"Polar H9 AEC59026" → "AEC59026". 심박수 밴드 몸통에 인쇄된 번호와
+    맞춰 고를 수 있게, PASCO 기기와 같은 규칙(이름 마지막 토큰)을 쓴다."""
+    if not name:
+        return None
+    parts = name.split()
+    return parts[-1] if parts else None
+
+
+def scan_standard_ble_heart_rate() -> list[dict]:
+    """표준 심박수 서비스(0x180D)를 광고하는 기기를 찾는다. PASCO 전용이 아니므로
+    pasco 라이브러리를 쓰지 않고 bleak로 직접 스캔한다.
+
+    이름이 아니라 광고 데이터의 서비스 UUID로 걸러야 정확하다 — 이름만 보면 근처의
+    아무 블루투스 기기(휴대폰·TV 등)나 걸릴 수 있다.
+
+    2026-08-18 Polar H9 실물로 확인. 접촉이 끊기면 광고 자체가 멈추므로, 검색 전에
+    학생이 센서를 두 손으로 계속 잡고 있어야 한다."""
+    from bleak import BleakScanner
+
+    async def _scan():
+        return await BleakScanner.discover(timeout=8.0, return_adv=True)
+
+    try:
+        found = _run_hr_coro(_scan(), timeout=15.0)
+    except Exception as exc:
+        raise SensorConnectionError(f"심박수 센서 검색 실패: {exc}") from exc
+
+    results = []
+    for device, adv in found.values():
+        service_uuids = [u.lower() for u in (adv.service_uuids or [])]
+        if _HR_SERVICE_UUID not in service_uuids:
+            continue
+        device_id = _hr_device_id_from_name(device.name)
+        if device_id:
+            _hr_scan_cache[device_id] = device
+            results.append({"deviceId": device_id, "label": device.name, "sensorType": "HeartRate"})
+    return results
+
+
+class StandardBleHeartRateSource:
+    """표준 블루투스 심박수 프로필(0x180D)로 실시간 연결되는 심박수 센서.
+
+    PascoSensorSource와 같은 인터페이스(connect/start/stop/record_event/
+    latest_points/display_points/disconnect)를 제공해 main.py가 두 종류를
+    구분하지 않고 다룰 수 있다. 다만 내부 동작 방식은 다르다 — pasco는
+    read_data()를 반복 호출하는 폴링 방식이지만, bleak는 기기가 값을 보내줄
+    때마다 콜백이 불리는 notify(밀어주기) 방식이다. 그래서 폴링 스레드 대신
+    모든 인스턴스가 모듈 공용 이벤트 루프(_get_hr_loop())를 함께 쓰고,
+    Flask 스레드에서는 run_coroutine_threadsafe()로 필요한 순간에만 코루틴을
+    끼워 넣는다 — 스캔과 연결이 서로 다른 루프를 쓰면 macOS CoreBluetooth가
+    거부하기 때문에(아래 _get_hr_loop 주석 참고) 인스턴스마다 루프를 새로
+    만들지 않는다.
+
+    2026-08-18 Polar H9 실물로 scan→connect→start→(15초간 83~84bpm 안정 수신)→
+    stop→disconnect 전체 흐름 확인.
+    """
+
+    def __init__(self, sensor_name: str = "HeartRate"):
+        if sensor_name not in STANDARD_BLE_SENSORS:
+            raise ValueError(f"표준 BLE로 연결할 수 없는 센서입니다: {sensor_name}")
+        self.sensor_name = sensor_name
+        self.unit = STANDARD_BLE_SENSORS[sensor_name]["unit"]
+        self.device_id: str | None = None
+        self._client = None
+        self._points: list[dict] = []
+        self._bucket: list[tuple[float, float]] = []
+        self._events: list[dict] = []
+        self._start_time: float | None = None
+        self._interval_sec: float = 10.0
+        self._next_flush: float = 0.0
+        self._measuring = False
+        self._last_error: str | None = None
+        self._fatal_error: str | None = None
+
+    def connect(self, device_id: str) -> None:
+        """심박수 센서 번호(scan_standard_ble_heart_rate()가 돌려준 값, 예: "AEC59026")로 연결한다."""
+        if not device_id:
+            raise SensorConnectionError("센서 번호를 입력해야 합니다")
+        ble_device = _hr_scan_cache.pop(device_id, None)
+        if ble_device is None:
+            raise SensorConnectionError(
+                f"심박수 센서({device_id})를 찾을 수 없습니다 — 다시 검색해 주세요"
+            )
+
+        async def _connect():
+            from bleak import BleakClient
+
+            client = BleakClient(ble_device, timeout=20.0)
+            await client.connect()
+            has_hr = any(s.uuid == _HR_SERVICE_UUID for s in client.services)
+            if not has_hr:
+                await client.disconnect()
+                raise SensorConnectionError("표준 심박수 서비스가 없는 기기입니다")
+            return client
+
+        try:
+            self._client = _run_hr_coro(_connect())
+        except Exception as exc:
+            raise SensorConnectionError(f"심박수 센서({device_id}) 연결 실패: {exc}") from exc
+
+        self.device_id = device_id
+        self._last_error = None
+        self._fatal_error = None
+
+    def is_connected(self) -> bool:
+        return bool(self._client and self._client.is_connected)
+
+    def is_measuring(self) -> bool:
+        return self._measuring
+
+    @property
+    def last_error(self) -> str | None:
+        return self._fatal_error or self._last_error
+
+    @property
+    def fatal_error(self) -> str | None:
+        return self._fatal_error
+
+    @staticmethod
+    def _parse_hr(data: bytearray) -> float:
+        """표준 심박수 측정 특성(0x2A37)의 첫 바이트는 플래그다 — 0비트가 1이면
+        심박수 값이 2바이트(UINT16), 0이면 1바이트(UINT8)로 온다(BLE 표준 규격)."""
+        flags = data[0]
+        if flags & 0x01:
+            return float(int.from_bytes(data[1:3], byteorder="little"))
+        return float(data[1])
+
+    def start(self, interval_sec: float, keep_existing: bool = False) -> None:
+        if self._measuring:
+            raise SensorConnectionError("이미 측정 중입니다")
+        if not self.is_connected():
+            raise SensorConnectionError("connect()를 먼저 호출해야 합니다")
+        if not keep_existing:
+            self._points = []
+            self._events = []
+        self._bucket = []
+        self._interval_sec = interval_sec
+        self._last_error = None
+        self._fatal_error = None
+        last_t = self._points[-1]["t"] if keep_existing and self._points else 0
+        self._start_time = time.monotonic() - last_t
+        self._next_flush = time.monotonic() + interval_sec
+
+        def handler(_sender, data: bytearray) -> None:
+            try:
+                hr = self._parse_hr(data)
+            except (IndexError, ValueError):
+                return
+            elapsed = time.monotonic() - self._start_time
+            self._bucket.append((elapsed, hr))
+            if time.monotonic() >= self._next_flush:
+                self._flush_bucket()
+                self._next_flush += self._interval_sec
+
+        async def _start_notify():
+            await self._client.start_notify(_HR_MEASUREMENT_UUID, handler)
+
+        try:
+            _run_hr_coro(_start_notify())
+        except Exception as exc:
+            raise SensorConnectionError(f"심박수 측정 시작 실패: {exc}") from exc
+        self._measuring = True
+
+    def _flush_bucket(self) -> None:
+        if not self._bucket:
+            return
+        avg = sum(v for _, v in self._bucket) / len(self._bucket)
+        t = self._bucket[-1][0]
+        self._points.append({"t": round(t, 1), "v": round(avg, 1)})
+        self._bucket = []
+
+    def record_event(self, label: str) -> None:
+        if self._start_time is None:
+            raise RuntimeError("측정이 시작되지 않았습니다")
+        elapsed = time.monotonic() - self._start_time
+        self._events.append({"t": round(elapsed, 1), "label": label})
+
+    def latest_points(self) -> list[dict]:
+        return list(self._points)
+
+    def display_points(self) -> list[dict]:
+        tail = [{"t": round(t, 2), "v": v} for t, v in self._bucket]
+        return self._points + tail
+
+    def latest_events(self) -> list[dict]:
+        return list(self._events)
+
+    def stop(self) -> tuple[list[dict], list[dict]]:
+        """측정만 멈춘다. 연결은 다음 측정을 위해 유지한다 (PascoSensorSource와 동일)."""
+        if self._measuring:
+
+            async def _stop_notify():
+                try:
+                    await self._client.stop_notify(_HR_MEASUREMENT_UUID)
+                except Exception:
+                    pass  # 이미 끊겼으면 멈출 것도 없다 — 아래에서 마지막 값은 그대로 저장한다
+
+            try:
+                _run_hr_coro(_stop_notify())
+            except Exception:
+                pass  # 연결이 이미 끊긴 상태일 수 있다 — 아래에서 마지막 값은 그대로 저장한다
+            self._measuring = False
+        self._flush_bucket()
+        return list(self._points), list(self._events)
+
+    def disconnect(self) -> None:
+        """사용을 완전히 끝낼 때 센서 연결을 해제한다. 공용 이벤트 루프(_get_hr_loop())는
+        다른 채널이나 다음 측정이 계속 쓸 수 있으므로 여기서 멈추지 않는다."""
+        if self._measuring:
+            self.stop()
+        if self._client is not None:
+
+            async def _disconnect():
+                try:
+                    await self._client.disconnect()
+                except Exception:
+                    pass
+
+            try:
+                _run_hr_coro(_disconnect())
+            except Exception:
+                pass
+            self._client = None
 
 
 class ManualInputSource:

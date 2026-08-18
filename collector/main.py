@@ -39,7 +39,10 @@ class _Channel:
     화면과 업로드 양쪽에서 "이 값이 어느 센서 것인지"를 항상 알 수 있다."""
 
     def __init__(self, sensor_name: str, device_id: str, label: str, title: str):
-        self.source = sensor.PascoSensorSource(sensor_name)
+        if sensor_name in sensor.STANDARD_BLE_SENSORS:
+            self.source = sensor.StandardBleHeartRateSource(sensor_name)
+        else:
+            self.source = sensor.PascoSensorSource(sensor_name)
         self.sensor_name = sensor_name
         self.device_id = device_id
         self.label = label
@@ -173,10 +176,13 @@ def api_scan():
     같이 돌려줘야 한다 — 학생이 자기 모둠 센서 번호와 맞춰 골라야
     옆 모둠 것에 잘못 연결되지 않는다(세션 G가 실물 센서로 확인)."""
     sensor_type = request.args.get("type", "")
-    if sensor_type not in sensor.PASCO_SENSORS:
-        return jsonify(ok=False, error=f"알 수 없는 센서 종류입니다: {sensor_type}"), 400
     try:
-        devices = sensor.scan_sensors(sensor_type)
+        if sensor_type in sensor.STANDARD_BLE_SENSORS:
+            devices = sensor.scan_standard_ble_heart_rate()
+        elif sensor_type in sensor.PASCO_SENSORS:
+            devices = sensor.scan_sensors(sensor_type)
+        else:
+            return jsonify(ok=False, error=f"알 수 없는 센서 종류입니다: {sensor_type}"), 400
     except sensor.SensorConnectionError as exc:
         return jsonify(ok=False, error=str(exc)), 500
     return jsonify(ok=True, devices=devices)
@@ -191,7 +197,7 @@ def api_add_channel():
     label = (data.get("label") or "").strip()
     title = (data.get("title") or "").strip() or f"{label}({device_id})"
 
-    if sensor_name not in sensor.PASCO_SENSORS:
+    if sensor_name not in sensor.PASCO_SENSORS and sensor_name not in sensor.STANDARD_BLE_SENSORS:
         return jsonify(ok=False, error=f"알 수 없는 센서 종류입니다: {sensor_name}"), 400
     if not device_id or not label:
         return jsonify(ok=False, error="센서 번호와 이름표를 모두 입력하세요"), 400

@@ -99,5 +99,25 @@ class SensorReliabilityTest(unittest.TestCase):
         self.assertEqual(sensor.PASCO_SENSORS["Pressure"]["unit"], "psi")
 
 
+class StandardBleHeartRateTest(unittest.TestCase):
+    """표준 BLE 심박수(0x180D) 경로의 순수 로직만 검증한다 — 실제 연결은
+    2026-08-18 Polar H9 실물로 별도 확인함(scan→connect→start→stop→disconnect)."""
+
+    def test_device_id_from_name_takes_last_token(self) -> None:
+        self.assertEqual(sensor._hr_device_id_from_name("Polar H9 AEC59026"), "AEC59026")
+        self.assertIsNone(sensor._hr_device_id_from_name(None))
+        self.assertIsNone(sensor._hr_device_id_from_name(""))
+
+    def test_parse_hr_uint8_format(self) -> None:
+        # flags=0x00(0비트=0) → 두 번째 바이트가 심박수(UINT8). 실물 Polar H9 응답 형식.
+        src = sensor.StandardBleHeartRateSource.__new__(sensor.StandardBleHeartRateSource)
+        self.assertEqual(src._parse_hr(bytearray([0x00, 75])), 75.0)
+
+    def test_parse_hr_uint16_format(self) -> None:
+        # flags=0x01(0비트=1) → 이어지는 2바이트(리틀엔디안)가 심박수.
+        src = sensor.StandardBleHeartRateSource.__new__(sensor.StandardBleHeartRateSource)
+        self.assertEqual(src._parse_hr(bytearray([0x01, 0x4B, 0x00])), 75.0)
+
+
 if __name__ == "__main__":
     unittest.main()

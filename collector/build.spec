@@ -41,11 +41,15 @@ a = Analysis(
     binaries=[],
     datas=_datas,
     hiddenimports=[
-        # pasco·requests는 동적 import(지연 import)로 쓰는 곳이 있어
+        # pasco·requests·bleak는 동적 import(지연 import)로 쓰는 곳이 있어
         # PyInstaller가 자동으로 못 찾을 수 있으므로 명시한다.
+        # bleak는 2026-08-18 표준 BLE 심박수 경로(StandardBleHeartRateSource)
+        # 추가로 sensor.py가 직접 쓰기 시작했다 — 이전엔 pasco의 숨은 의존성이라
+        # 자동으로 딸려 왔지만, 이제 직접 import라 명시가 안전하다.
         "pasco",
         "pasco.pasco_ble_device",
         "requests",
+        "bleak",
     ],
     hookspath=[],
     hooksconfig={},
