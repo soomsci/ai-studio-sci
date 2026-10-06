@@ -7,6 +7,11 @@
 //   탭이 열릴 때마다 mount가 호출된다. containerEl은 비워진 상태로 넘어온다.
 //   모듈 파일이 아직 없으면 "준비 중" 화면이 대신 나온다.
 
+import { flushSaves } from "./save-state.js";
+
+let shownId = "home";
+let showVersion = 0;
+let mounting = Promise.resolve();
 const tabs = new Map(); // id → { label, mount }
 let navEl = null;
 let outletEl = null;
@@ -44,12 +49,28 @@ function renderNav() {
   }
 }
 
-function show(id) {
+async function show(id) {
+  const version = ++showVersion;
+  if (!await flushSaves()) {
+    history.replaceState(null, "", "#" + shownId);
+    renderNav();
+    return;
+  }
+  if (version !== showVersion) return;
+  await mounting;
+  if (version !== showVersion) return;
+  shownId = id;
   renderNav();
   outletEl.innerHTML = "";
   const tab = tabs.get(id);
   if (tab?.mount) {
-    tab.mount(outletEl);
+    const view = document.createElement("div");
+    outletEl.append(view);
+    mounting = Promise.resolve(tab.mount(view)).catch((error) => {
+      console.error(error);
+      if (view.isConnected) view.textContent = "이 화면을 불러오지 못했어요. 다시 탭을 눌러 주세요.";
+    });
+    await mounting;
   } else {
     // 담당 세션이 아직 파일을 만들지 않은 탭
     const box = document.createElement("div");

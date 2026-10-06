@@ -6,6 +6,7 @@
 // 가짜 데이터를 메모리에 채워 두고 같은 함수 시그니처로 응답한다.
 // (새로고침하면 연습 모드 데이터는 사라진다 — 화면에 안내함)
 
+import { scheduleSave, flushSaves } from "./save-state.js";
 import { isConfigured, getFirebase } from "./firebase-init.js";
 import { getSession, ensureAuth } from "./auth.js";
 
@@ -150,6 +151,7 @@ function emptyAnalysis(expNo, groupId) {
 }
 
 export async function getAnalysis(expNo, groupId) {
+  if (!await flushSaves()) throw new Error("답변을 저장하지 못했어요. 다시 저장한 뒤 이동해 주세요.");
   if (MODE === "mock") {
     return memory.analyses.get(analysisId(expNo, groupId)) || emptyAnalysis(expNo, groupId);
   }
@@ -159,7 +161,13 @@ export async function getAnalysis(expNo, groupId) {
   return { ...emptyAnalysis(expNo, groupId), ...fromDoc(snap) };
 }
 
-export async function saveAnalysis(analysis) {
+export function saveAnalysis(analysis, delay = 0) {
+  const classId = getSession()?.classId;
+  return scheduleSave(classId + ":" + analysisId(analysis.expNo, analysis.groupId), analysis,
+    (snapshot) => writeAnalysis(snapshot, classId), delay);
+}
+
+async function writeAnalysis(analysis, savedClassId) {
   const { expNo, groupId } = analysis;
   if (!expNo || !groupId) throw new Error("분석에는 expNo와 groupId가 있어야 해요.");
   const doc = { ...analysis, updatedAt: new Date(), createdAt: analysis.createdAt || new Date() };
@@ -167,7 +175,9 @@ export async function saveAnalysis(analysis) {
     memory.analyses.set(analysisId(expNo, groupId), doc);
     return;
   }
-  const { db, f, classId } = await fs();
+  const { db, fsMod: f } = await getFirebase();
+  const classId = savedClassId;
+  if (!classId) throw new Error("학급에 입장해 주세요.");
   delete doc.id; // 문서 안에 id 필드를 남기지 않는다
   await f.setDoc(f.doc(db, "classes", classId, "analyses", analysisId(expNo, groupId)), doc, { merge: true });
 }

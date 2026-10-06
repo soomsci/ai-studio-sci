@@ -9,7 +9,7 @@ import { isConfigured, getFirebase } from "./firebase-init.js";
 import {
   fetchMyClasses, createClass, updateClass, deleteClass, countClassContents, normalizeJoinCode,
 } from "./teacher-data.js";
-import { renderProgressTab, renderChartTab, renderManageTab, renderTvTab } from "./teacher-tabs.js";
+import { invalidateDatasetsCache, renderProgressTab, renderChartTab, renderManageTab, renderTvTab } from "./teacher-tabs.js";
 
 let currentUser = null;
 let myClasses = [];
@@ -68,6 +68,18 @@ async function enterDashboard() {
   // 탭 전환
   document.querySelectorAll(".th-tab").forEach((btn) => {
     btn.addEventListener("click", () => switchTab(btn.dataset.tab));
+  });
+
+  const refreshBtn = document.createElement("button");
+  refreshBtn.className = "btn small ghost";
+  refreshBtn.textContent = "새로고침";
+  document.querySelector(".th-tab").parentElement.append(refreshBtn);
+  refreshBtn.addEventListener("click", async () => {
+    if (!currentClass) return;
+    refreshBtn.disabled = true;
+    invalidateDatasetsCache();
+    try { await selectClass(currentClass.id); }
+    finally { refreshBtn.disabled = false; }
   });
 
   setupClassModal();
@@ -227,9 +239,14 @@ const TAB_RENDERERS = {
 };
 
 // 탭 하나를 그린다. 실패해도 다른 탭에 번지지 않게 개별로 감싼다.
+const tabRequests = {};
 function renderTab(name) {
-  return TAB_RENDERERS[name](currentClass).catch((err) => {
+  const cls = currentClass;
+  const request = (tabRequests[name] || 0) + 1;
+  tabRequests[name] = request;
+  return TAB_RENDERERS[name](cls).catch((err) => {
     console.error(err);
+    if (currentClass !== cls || tabRequests[name] !== request) return;
     const el = document.getElementById("tab-" + name);
     if (el) el.innerHTML = `<p style="color:var(--dim)">이 화면을 불러오지 못했어요. 탭을 다시 눌러 보세요.</p>`;
   });
@@ -241,13 +258,16 @@ async function selectClass(classId) {
   // 네 탭이 순서대로(await 줄줄이) Firestore를 읽으면 느리다. 지금 열려 있는 탭만 먼저
   // 그려서 빨리 보여주고, 나머지 세 탭은 뒤에서 병렬로 그려 둔다(탭 전환 시 바로 보이게).
   const activeTab = document.querySelector(".th-tab.active")?.dataset.tab || "progress";
+  const cls = currentClass;
   await renderTab(activeTab);
+  if (currentClass !== cls) return;
   Object.keys(TAB_RENDERERS)
     .filter((name) => name !== activeTab)
     .forEach((name) => renderTab(name));
 }
 
 function switchTab(name) {
+  if (currentClass) renderTab(name);
   document.querySelectorAll(".th-tab").forEach((b) => b.classList.toggle("active", b.dataset.tab === name));
   document.querySelectorAll(".th-section").forEach((s) => s.classList.toggle("active", s.id === "tab-" + name));
 }

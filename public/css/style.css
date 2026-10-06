@@ -361,3 +361,79 @@ input, textarea, select { font-family: inherit; font-size: inherit; color: var(-
   .step-foot { flex-direction: column; gap: 8px; }
   .phase-foot { flex-direction: column; align-items: stretch; }
 }
+
+/* 실험별 표시 스타일 */
+
+    .exp1-header h2 { margin-bottom: 4px; }
+    .exp1-question { color: #444; }
+    .exp1-box { border: 1px solid #ddd; border-radius: 10px; padding: 12px 16px; margin: 12px 0; }
+    .exp1-help, .exp1-dim { color: #777; font-size: 14px; }
+    .exp1-item { display: block; padding: 4px 0; cursor: pointer; }
+    .exp1-item input { margin-right: 6px; }
+    .exp1-practice { margin-top: 8px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .exp1-controls { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; margin: 8px 0; }
+    .exp1-chartbox { position: relative; height: 320px; margin: 8px 0; }
+    .exp1-table { border-collapse: collapse; font-size: 14px; margin: 8px 0; width: 100%; }
+    .exp1-table th, .exp1-table td { border: 1px solid #ddd; padding: 4px 8px; text-align: left; }
+    .exp1-table th { background: #f6f7f9; }
+    /* 화면(계획/측정/분석) 전환 UI 스타일은 css/style.css의 .phase-* 규칙을 쓴다 */
+    /* 사건 메모선 입력칸·목록 스타일은 js/annotations.js가 직접 넣는다 */
+
+
+    .exp2-header h2 { margin-bottom: 4px; }
+    .exp2-question { color: #444; }
+    .exp2-box { border: 1px solid #ddd; border-radius: 10px; padding: 12px 16px; margin: 12px 0; }
+    .exp2-help, .exp2-dim { color: #777; font-size: 14px; }
+    .exp2-item { display: block; padding: 4px 0; cursor: pointer; }
+    .exp2-item input { margin-right: 6px; }
+    .exp2-practice { margin-top: 8px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .exp2-controls { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; margin: 8px 0; }
+    .exp2-gap { margin-left: 8px; }
+    .exp2-chartbox { position: relative; height: 320px; margin: 8px 0; }
+    .exp2-vars { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
+    .exp2-vars label { display: flex; flex-direction: column; gap: 4px; font-size: 14px; color: #333; }
+    .exp2-vars input[type=text] { padding: 6px 8px; border: 1px solid #ccc; border-radius: 6px; }
+    .exp2-table { border-collapse: collapse; font-size: 14px; margin: 8px 0; width: 100%; }
+    .exp2-table th, .exp2-table td { border: 1px solid #ddd; padding: 4px 8px; text-align: left; }
+    .exp2-table th { background: #f6f7f9; }
+    /* 잠금 표시(칩·안내문)는 phase-nav.js와 style.css의 .phase-* 규칙이 맡는다 */
+    /* 사건 메모선 입력칸·목록 스타일은 js/annotations.js가 직접 넣는다 */
+
+
+    .exp3-header h2 { margin-bottom: 4px; }
+    .exp3-help, .exp3-dim { color: #777; font-size: 14px; }
+    .exp3-question { color: #444; margin: 8px 0; }
+    .exp3-box { border: 1px solid #ddd; border-radius: 10px; padding: 12px 16px; margin: 12px 0; }
+    .exp3-item { display: block; padding: 4px 0; cursor: pointer; }
+    .exp3-item input { margin-right: 6px; }
+    .exp3-practice { margin-top: 8px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .exp3-chartbox { position: relative; height: 320px; margin: 8px 0; }
+    .exp3-toggle { display: block; font-size: 14px; margin-bottom: 4px; cursor: pointer; }
+    .exp3-toggle input { margin-right: 6px; }
+    .exp3-table { border-collapse: collapse; font-size: 14px; margin: 8px 0; width: 100%; }
+    .exp3-table th, .exp3-table td { border: 1px solid #ddd; padding: 4px 8px; text-align: left; }
+    .exp3-table th { background: #f6f7f9; }
+    #exp3-topic-select { font-size: 14px; padding: 4px 6px; margin-top: 6px; }
+
+
+    .exp4-safety { background: #fff4e5; border: 1px solid #f5b878; border-left: 6px solid #f59e0b;
+                   border-radius: 8px; padding: 10px 14px; margin: 12px 0; line-height: 1.6; }
+    .exp4-header h2 { margin-bottom: 4px; }
+    .exp4-question { color: #444; }
+    .exp4-box { border: 1px solid #ddd; border-radius: 10px; padding: 12px 16px; margin: 12px 0; }
+    .exp4-help, .exp4-dim { color: #777; font-size: 14px; }
+    .exp4-note { color: #b45309; font-size: 14px; margin: 6px 0 0; }
+    .exp4-item { display: block; padding: 4px 0; cursor: pointer; }
+    .exp4-item input { margin-right: 6px; }
+    .exp4-practice { margin-top: 8px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .exp4-controls { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; margin: 8px 0; }
+    .exp4-chartbox { position: relative; height: 320px; margin: 8px 0; }
+    .exp4-table { border-collapse: collapse; font-size: 14px; margin: 8px 0; width: 100%; }
+    .exp4-table th, .exp4-table td { border: 1px solid #ddd; padding: 4px 8px; text-align: left; }
+    .exp4-table th { background: #f6f7f9; }
+    /* 화면(계획/측정/분석) 전환 UI 스타일은 css/style.css의 .phase-* 규칙을 쓴다 */
+    /* 사건 메모선 입력칸·목록 스타일은 js/annotations.js가 직접 넣는다 */
+
+
+.save-status { position:fixed; bottom:12px; right:12px; z-index:1000; padding:8px 12px; border:1px solid #ccc; border-radius:8px; background:#fff; font-size:14px; }
+.save-status button { margin-left:8px; }

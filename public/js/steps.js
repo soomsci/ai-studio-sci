@@ -34,7 +34,7 @@
 //     · 관문 진행 상태(맞힘/시도횟수/통과)는 analysis.gates에 따로 둔다.
 //
 //   analysis: getAnalysis()로 받은 객체. 이 함수가 직접 고쳐 나간다.
-//   onSave(analysis): 저장 함수. 입력 1초 후 자동 호출된다(디바운스).
+//   onSave(analysis, delay=0): 저장 함수. 글 입력은 1초 지연을 요청한다.
 //   onCompleteChange(complete): (선택) 모든 단계 완료 여부가 바뀔 때 호출.
 //       설계 단계를 렌더한 실험 코드가 이 신호로 측정 영역을 열고 닫는다.
 //
@@ -45,17 +45,14 @@ export function renderSteps(containerEl, stepConfig, analysis, onSave, onComplet
   analysis.aiLog = analysis.aiLog || [];
   analysis.gates = analysis.gates || {}; // 선택 관문 진행 상태
   let current = 0;
-  let saveTimer = null;
   let lastComplete = isStepsComplete(stepConfig, analysis);
 
-  // 입력이 멈추고 1초 뒤 자동 저장 (SPEC §8.4 — "저장" 버튼을 두지 않는다)
+  // 공통 저장 함수가 입력 직후 미저장 상태를 표시하고 1초 뒤 저장한다.
   function queueSave() {
-    clearTimeout(saveTimer);
-    saveTimer = setTimeout(() => onSave(analysis), 1000);
+    onSave(analysis, 1000);
     maybeNotifyComplete();
   }
   function saveNow() {
-    clearTimeout(saveTimer);
     onSave(analysis);
     maybeNotifyComplete();
   }

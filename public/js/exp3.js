@@ -1,3 +1,4 @@
+import { renderDatasetChoices, escapeText } from "./utils.js";
 // js/exp3.js — 실험 3 "운동과 우리 몸" 탭 (세션 D)
 //
 // 화면 구성:
@@ -40,7 +41,6 @@ let phaseApi = null; // renderPhases()가 돌려주는 { refresh(), goTo() } —
 export async function mount(containerEl) {
   rootEl = containerEl;
   session = getSession();
-  injectStyle();
 
   containerEl.innerHTML = `
     <section class="exp3-header">
@@ -82,7 +82,7 @@ function renderTopicPicker(el) {
   `;
   el.querySelector("#exp3-topic-select").addEventListener("change", async (e) => {
     analysis.chartOptions.topic = e.target.value;
-    await saveAnalysis(analysis);
+    if (!await saveAnalysis(analysis)) return;
     await renderBody(); // 주제가 바뀌면 phase-nav를 다시 만들어 "1. 계획 세우기"부터 보여준다
   });
 }
@@ -217,31 +217,10 @@ function pickedDatasets() {
 }
 
 // ── 측정 목록 (체크박스) — exp1과 동일한 패턴 ─────────────────
-function renderDatasetList(listEl, topic) {
-  if (!datasets.length) {
-    listEl.innerHTML = `<p class="exp3-dim">아직 측정이 없어요. 아래에서 연습 데이터를 만들어 보세요.</p>`;
-    return;
-  }
-  listEl.innerHTML = datasets
-    .map((d) => {
-      const checked = analysis.datasetIds.includes(d.id) ? "checked" : "";
-      return `<label class="exp3-item">
-        <input type="checkbox" data-id="${d.id}" ${checked}>
-        <b>${d.title}</b>
-        <span class="exp3-dim">${d.condition} · ${d.points.length}개 점${d.source === "mock" ? " · 연습" : ""}</span>
-      </label>`;
-    })
-    .join("");
-
-  listEl.querySelectorAll("input[type=checkbox]").forEach((box) => {
-    box.addEventListener("change", async () => {
-      const id = box.dataset.id;
-      analysis.datasetIds = box.checked
-        ? [...analysis.datasetIds, id]
-        : analysis.datasetIds.filter((x) => x !== id);
-      await saveAnalysis(analysis);
-      // 분석 화면은 지금 안 보이므로 다시 그릴 필요가 없다 — 나중에 넘어갈 때 새로 그려진다.
-    });
+function renderDatasetList(listEl) {
+  renderDatasetChoices(listEl, {
+    datasets, analysis, prefix: "exp3",
+    onChange: () => saveAnalysis(analysis),
   });
 }
 
@@ -352,8 +331,8 @@ function renderStep3Chart(slotEl, topic) {
   const rows = picked
     .map((d) => {
       const st = topic.chartMode === "scatter" ? computeStatsIntensity(d) : computeStatsRecovery(d, topic);
-      const cells = topic.stats.map((s) => `<td>${st[s.key] ?? "—"}</td>`).join("");
-      return `<tr><td>${d.title}</td>${cells}</tr>`;
+      const cells = topic.stats.map((s) => `<td>${escapeText(st[s.key] ?? "—")}</td>`).join("");
+      return `<tr><td>${escapeText(d.title)}</td>${cells}</tr>`;
     })
     .join("");
   statsEl.innerHTML = `<p class="exp3-help">자동 계산 — 내가 그래프에서 짚은 값과 비교해 보세요.</p>
@@ -496,25 +475,3 @@ function fmtV(v, unit) {
 }
 
 // ── 이 탭에서만 쓰는 최소 스타일 ──────────────────────────
-function injectStyle() {
-  if (document.getElementById("exp3-style")) return;
-  const style = document.createElement("style");
-  style.id = "exp3-style";
-  style.textContent = `
-    .exp3-header h2 { margin-bottom: 4px; }
-    .exp3-help, .exp3-dim { color: #777; font-size: 14px; }
-    .exp3-question { color: #444; margin: 8px 0; }
-    .exp3-box { border: 1px solid #ddd; border-radius: 10px; padding: 12px 16px; margin: 12px 0; }
-    .exp3-item { display: block; padding: 4px 0; cursor: pointer; }
-    .exp3-item input { margin-right: 6px; }
-    .exp3-practice { margin-top: 8px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-    .exp3-chartbox { position: relative; height: 320px; margin: 8px 0; }
-    .exp3-toggle { display: block; font-size: 14px; margin-bottom: 4px; cursor: pointer; }
-    .exp3-toggle input { margin-right: 6px; }
-    .exp3-table { border-collapse: collapse; font-size: 14px; margin: 8px 0; width: 100%; }
-    .exp3-table th, .exp3-table td { border: 1px solid #ddd; padding: 4px 8px; text-align: left; }
-    .exp3-table th { background: #f6f7f9; }
-    #exp3-topic-select { font-size: 14px; padding: 4px 6px; margin-top: 6px; }
-  `;
-  document.head.append(style);
-}

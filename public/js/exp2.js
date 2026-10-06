@@ -1,3 +1,4 @@
+import { renderDatasetChoices, escapeText } from "./utils.js";
 // js/exp2.js — 실험 2 "교실 식물 최적 조건 찾기" 탭 (세션 C)
 //
 // 화면 구성 — phase-nav.js(세션 A)로 세 화면을 오간다:
@@ -13,7 +14,7 @@
 
 import { EXP2 } from "../config/exp2.config.js";
 import { listDatasets, saveDataset, getAnalysis, saveAnalysis } from "./data.js";
-import { renderChart } from "./chart-kit.js";
+import { renderChart, restoreCharts } from "./chart-kit.js";
 import { renderSteps, isStepsComplete } from "./steps.js";
 import { renderRawDataTable } from "./raw-data.js";
 import { mountAnnotations } from "./annotations.js";
@@ -37,7 +38,6 @@ export async function mount(containerEl) {
   session = getSession();
   planNode = null;
   analyzeNode = null;
-  injectStyle();
 
   containerEl.innerHTML = `
     <section class="exp2-header">
@@ -117,6 +117,7 @@ function renderAnalyzePhase(slotEl) {
     renderSteps(analyzeNode, buildSteps(), analysis, saveAnalysis);
   }
   slotEl.append(analyzeNode);
+  restoreCharts(analyzeNode); // 보관된 화면의 캔버스를 다시 붙이면 차트도 복원한다.
 }
 
 // 측정 목록과 분석 문서를 불러온다 (화면을 그리는 일은 각 phase의 render가 한다)
@@ -165,31 +166,9 @@ function groupByCondition(list) {
 
 // ── ② 측정 목록 (체크박스) ────────────────────────────────
 function renderDatasetList(listEl) {
-  if (!datasets.length) {
-    listEl.innerHTML = `<p class="exp2-dim">아직 측정이 없어요. 아래에서 연습 데이터를 만들어 보세요.</p>`;
-    return;
-  }
-  listEl.innerHTML = datasets
-    .map((d) => {
-      const mins = Math.round((d.points.at(-1)?.t || 0) / 60);
-      const checked = analysis.datasetIds.includes(d.id) ? "checked" : "";
-      return `<label class="exp2-item">
-        <input type="checkbox" data-id="${d.id}" ${checked}>
-        <b>${d.title}</b>
-        <span class="exp2-dim">${d.condition} · ${mins}분 · ${d.points.length}개 점${d.source === "mock" ? " · 연습" : ""}</span>
-      </label>`;
-    })
-    .join("");
-
-  listEl.querySelectorAll("input[type=checkbox]").forEach((box) => {
-    box.addEventListener("change", () => {
-      const id = box.dataset.id;
-      analysis.datasetIds = box.checked
-        ? [...analysis.datasetIds, id]
-        : analysis.datasetIds.filter((x) => x !== id);
-      saveAnalysis(analysis);
-      analyzeNode = null; // 고른 측정이 바뀌었으니 분석 화면은 다음에 열 때 새로 짓는다
-    });
+  renderDatasetChoices(listEl, {
+    datasets, analysis, prefix: "exp2",
+    onChange: () => { saveAnalysis(analysis); analyzeNode = null; },
   });
 }
 
@@ -230,20 +209,16 @@ function renderStep1Vars(slotEl) {
   slotEl.innerHTML = `
     <div class="exp2-vars">
       <label>${EXP2.variablePrompts.manipulated}
-        <input id="exp2-manip" type="text" value="${escapeAttr(opts.manipulated)}">
+        <input id="exp2-manip" type="text" value="${escapeText(opts.manipulated)}">
       </label>
       <label>${EXP2.variablePrompts.controlled}
-        <input id="exp2-ctrl" type="text" value="${escapeAttr(opts.controlled)}">
+        <input id="exp2-ctrl" type="text" value="${escapeText(opts.controlled)}">
       </label>
     </div>
     <div id="exp2-condtable"></div>
   `;
 
-  let saveTimer = null;
-  const queueSave = () => {
-    clearTimeout(saveTimer);
-    saveTimer = setTimeout(() => saveAnalysis(analysis), 1000);
-  };
+  const queueSave = () => saveAnalysis(analysis, 1000);
   slotEl.querySelector("#exp2-manip").addEventListener("input", (e) => {
     opts.manipulated = e.target.value;
     queueSave();
@@ -262,7 +237,7 @@ function renderStep1Vars(slotEl) {
   }
   const groups = groupByCondition(picked);
   const rows = [...groups.entries()]
-    .map(([cond, list]) => `<tr><td>${cond}</td><td>${list.length}번</td></tr>`)
+    .map(([cond, list]) => `<tr><td>${escapeText(cond)}</td><td>${list.length}번</td></tr>`)
     .join("");
   tableEl.innerHTML = `<table class="exp2-table">
     <thead><tr><th>조건</th><th>반복 횟수</th></tr></thead>
@@ -347,7 +322,7 @@ function renderStep3Chart(slotEl) {
     .map((cond) => {
       const st = statsMap.get(cond);
       const cells = EXP2.stats.map((s) => `<td>${fmtStat(s.key, st)}</td>`).join("");
-      return `<tr><td>${cond}</td>${cells}</tr>`;
+      return `<tr><td>${escapeText(cond)}</td>${cells}</tr>`;
     })
     .join("");
   statsEl.innerHTML = `<p class="exp2-help">자동 계산 — 내가 막대에서 짚은 값과 비교해 보세요.</p>
@@ -456,32 +431,5 @@ function fmtStat(key, st) {
   return "—";
 }
 
-function escapeAttr(s) { return String(s || "").replace(/"/g, "&quot;"); }
 
 // ── 이 탭에서만 쓰는 최소 스타일 ──────────────────────────
-function injectStyle() {
-  if (document.getElementById("exp2-style")) return;
-  const style = document.createElement("style");
-  style.id = "exp2-style";
-  style.textContent = `
-    .exp2-header h2 { margin-bottom: 4px; }
-    .exp2-question { color: #444; }
-    .exp2-box { border: 1px solid #ddd; border-radius: 10px; padding: 12px 16px; margin: 12px 0; }
-    .exp2-help, .exp2-dim { color: #777; font-size: 14px; }
-    .exp2-item { display: block; padding: 4px 0; cursor: pointer; }
-    .exp2-item input { margin-right: 6px; }
-    .exp2-practice { margin-top: 8px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-    .exp2-controls { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; margin: 8px 0; }
-    .exp2-gap { margin-left: 8px; }
-    .exp2-chartbox { position: relative; height: 320px; margin: 8px 0; }
-    .exp2-vars { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
-    .exp2-vars label { display: flex; flex-direction: column; gap: 4px; font-size: 14px; color: #333; }
-    .exp2-vars input[type=text] { padding: 6px 8px; border: 1px solid #ccc; border-radius: 6px; }
-    .exp2-table { border-collapse: collapse; font-size: 14px; margin: 8px 0; width: 100%; }
-    .exp2-table th, .exp2-table td { border: 1px solid #ddd; padding: 4px 8px; text-align: left; }
-    .exp2-table th { background: #f6f7f9; }
-    /* 잠금 표시(칩·안내문)는 phase-nav.js와 style.css의 .phase-* 규칙이 맡는다 */
-    /* 사건 메모선 입력칸·목록 스타일은 js/annotations.js가 직접 넣는다 */
-  `;
-  document.head.append(style);
-}

@@ -11,7 +11,34 @@ import {
   setActiveExpField, setVisibleExpsField, getVisibleExps,
 } from "./teacher-data.js";
 
-const TOTAL_STEPS = 5; // §8 분석 단계는 5단계
+import { escapeText } from "./utils.js";
+import { stepComplete } from "./steps.js";
+import { EXP1 } from "../config/exp1.config.js";
+import { EXP2 } from "../config/exp2.config.js";
+import { EXP3 } from "../config/exp3.config.js";
+import { EXP4 } from "../config/exp4.config.js";
+
+export function analysisProgress(expNo, analysis = {}) {
+  const config = { 1: EXP1, 2: EXP2, 3: EXP3, 4: EXP4 }[expNo];
+  const topic = expNo === 3 ? EXP3[analysis.chartOptions?.topic] : null;
+  const steps = topic?.steps || config?.steps || [];
+  const plan = expNo === 3
+    ? [...EXP3.designStepsCommon, ...(topic ? [topic.designStepExtra] : [])]
+    : config?.designSteps || [];
+  const count = (list) => list.filter((step) => stepComplete(step, analysis)).length;
+  const writing = steps.filter((step) => step.type !== "choice");
+  const gates = steps.filter((step) => step.type === "choice");
+  return { answered: count(writing), total: writing.length,
+    plan: count(plan), planTotal: plan.length, gates: count(gates), gateTotal: gates.length };
+}
+
+const renderVersions = {};
+function beginRender(name) {
+  const version = (renderVersions[name] || 0) + 1;
+  renderVersions[name] = version;
+  return () => renderVersions[name] === version;
+}
+
 const EXP_LABELS = { 1: "환기 주기", 2: "식물 광합성", 3: "운동과 몸", 4: "비열(물·식용유)" };
 const EXP_NUMS = Object.keys(EXP_LABELS).map(Number); // [1,2,3,4] — 하드코딩 대신 여기서 파생
 
@@ -31,11 +58,17 @@ function getDatasets(classId, expNo) {
     datasetsCache.clear();
     cachedClassId = classId;
   }
-  if (!datasetsCache.has(expNo)) datasetsCache.set(expNo, fetchClassDatasets(classId, expNo));
+  if (!datasetsCache.has(expNo)) {
+    const promise = fetchClassDatasets(classId, expNo).catch((error) => {
+      if (cachedClassId === classId && datasetsCache.get(expNo) === promise) datasetsCache.delete(expNo);
+      throw error;
+    });
+    datasetsCache.set(expNo, promise);
+  }
   return datasetsCache.get(expNo);
 }
 
-function invalidateDatasetsCache() {
+export function invalidateDatasetsCache() {
   datasetsCache.clear();
 }
 
@@ -49,6 +82,7 @@ function notice(text) {
 // ── 1. 모둠별 진행 현황 ──────────────────────────────────
 
 export async function renderProgressTab(cls) {
+  const isCurrent = beginRender("progress");
   const el = document.getElementById("tab-progress");
   el.innerHTML = "";
   if (MODE === "mock") el.append(notice("🧪 지금은 연습 모드예요. 가짜 데이터로 보여줘요."));
@@ -60,10 +94,14 @@ export async function renderProgressTab(cls) {
   // 분석 문서는 모둠×실험마다 따로 읽지 않고 classes/{classId}/analyses 컬렉션을 한 번에 읽는다.
   // 연습 모드는 컬렉션 조회가 없어 null이 오고, 그때는 기존처럼 건별로 fetchAnalysis를 쓴다.
   const allAnalyses = await fetchAllAnalyses(cls.id);
+  if (!isCurrent()) return;
 
   const perExp = await Promise.all(EXP_NUMS.map(async (expNo) => {
     const datasets = await getDatasets(cls.id, expNo);
-    const groupIds = [...new Set(datasets.map((d) => d.groupId))];
+    const groupIds = [...new Set([
+      ...datasets.map((d) => d.groupId),
+      ...Object.values(allAnalyses || {}).filter((a) => a.expNo === expNo).map((a) => a.groupId),
+    ])];
     const counts = {};
     datasets.forEach((d) => { counts[d.groupId] = (counts[d.groupId] || 0) + 1; });
     const analyses = {};
@@ -76,6 +114,7 @@ export async function renderProgressTab(cls) {
   }));
 
   const allGroupIds = [...new Set(perExp.flatMap((e) => e.groupIds))].sort();
+  if (!isCurrent()) return;
   loading.remove();
 
   if (allGroupIds.length === 0) {
@@ -101,16 +140,16 @@ export async function renderProgressTab(cls) {
 
   allGroupIds.forEach((gid) => {
     const tr = document.createElement("tr");
-    let cells = `<td class="group-name">${groupLabel(gid)}</td>`;
-    perExp.forEach(({ counts, analyses }) => {
+    let cells = `<td class="group-name">${escapeText(groupLabel(gid))}</td>`;
+    perExp.forEach(({ expNo, counts, analyses }) => {
       const count = counts[gid] || 0;
       const analysis = analyses[gid];
-      const answered = analysis ? Object.values(analysis.answers || {}).filter((a) => (a || "").trim?.()).length : 0;
+      const { answered, total, plan, planTotal, gates, gateTotal } = analysisProgress(expNo, analysis);
       const hasConclusion = !!analysis?.conclusion?.trim?.();
-      const stepClass = answered === 0 ? "none" : answered >= TOTAL_STEPS ? "done" : "doing";
+      const stepClass = answered === 0 ? "none" : total > 0 && answered === total ? "done" : "doing";
       cells += `
         <td>${count ? count + "건" : "—"}</td>
-        <td><span class="step-badge ${stepClass}">${answered}/${TOTAL_STEPS}</span></td>
+        <td><span class="step-badge ${stepClass}">${total ? `${answered}/${total}` : "주제 선택 전"}</span><br><small>계획 ${plan}/${planTotal} · 축 선택 ${gates}/${gateTotal}</small></td>
         <td>${hasConclusion ? "✅" : "—"}</td>
       `;
     });
@@ -121,9 +160,16 @@ export async function renderProgressTab(cls) {
   el.append(table);
 }
 
+function sensorLabel(d) {
+  const names = { CO2: "이산화 탄소", Temperature: "온도", HeartRate: "심박수", LungVolume: "폐활량",
+    Light: "조도", Pressure: "압력", Current: "전류", Voltage: "전압" };
+  return (names[d.sensor] || "측정값") + " (" + d.unit + ")";
+}
+
 // ── 2. 학급 종합 그래프 ──────────────────────────────────
 
 export async function renderChartTab(cls) {
+  const isCurrent = beginRender("chart");
   const el = document.getElementById("tab-chart");
   el.innerHTML = "";
 
@@ -132,54 +178,78 @@ export async function renderChartTab(cls) {
   toolbar.innerHTML = `
     <label for="chart-exp-select">실험 선택</label>
     <select id="chart-exp-select">
-      <option value="1">실험 1 · 환기 주기</option>
-      <option value="2">실험 2 · 식물 광합성</option>
-      <option value="3">실험 3 · 운동과 몸</option>
+      ${EXP_NUMS.map((n) => `<option value="${n}">실험 ${n} · ${EXP_LABELS[n]}</option>`).join("")}
     </select>
+    <label for="chart-sensor-select">측정값 종류</label>
+    <select id="chart-sensor-select"></select>
   `;
   el.append(toolbar);
-
   const chartWrap = document.createElement("div");
   chartWrap.className = "chart-wrap";
-  const canvas = document.createElement("canvas");
-  chartWrap.append(canvas);
   el.append(chartWrap);
-
   const select = toolbar.querySelector("#chart-exp-select");
-  const draw = async () => {
-    const expNo = Number(select.value);
-    const datasets = await getDatasets(cls.id, expNo);
-    if (datasets.length === 0) {
-      chartWrap.innerHTML = `<p style="color:var(--dim)">아직 이 실험에 측정된 데이터가 없어요.</p>`;
+  const sensorSelect = toolbar.querySelector("#chart-sensor-select");
+  const sensorKey = (d) => JSON.stringify([d.sensor, d.unit]);
+  let datasets = [];
+  let request = 0;
+
+  function draw() {
+    if (!isCurrent()) return;
+    chartWrap.replaceChildren();
+    const matching = datasets.filter((d) => sensorKey(d) === sensorSelect.value);
+    if (!matching.length) {
+      const message = document.createElement("p");
+      message.textContent = "아직 이 측정값이 없어요.";
+      chartWrap.append(message);
       return;
     }
-    chartWrap.innerHTML = "";
-    chartWrap.append(canvas);
-    // 모둠마다 가장 최근 측정 1개씩만 겹쳐 그린다
     const latestByGroup = new Map();
-    datasets.forEach((d) => {
+    matching.forEach((d) => {
       const prev = latestByGroup.get(d.groupId);
       const t = d.startedAt?.toDate ? d.startedAt.toDate().getTime() : new Date(d.startedAt).getTime();
       if (!prev || t > prev._t) latestByGroup.set(d.groupId, { ...d, _t: t });
     });
-    const first = [...latestByGroup.values()][0];
+    const first = matching[0];
+    const canvas = document.createElement("canvas");
+    chartWrap.append(canvas);
     renderChart(canvas, {
       type: "line",
-      datasets: [...latestByGroup.entries()].map(([gid, d]) => ({
-        label: groupLabel(gid), points: d.points || [],
-      })),
-      xLabel: "시간(분)",
-      yLabel: `${first.sensor} (${first.unit})`,
-      tooltip: { timeFormat: "mmss", valueLabel: first.sensor, valueUnit: first.unit },
+      datasets: [...latestByGroup.entries()].map(([gid, d]) => ({ label: groupLabel(gid), points: d.points || [] })),
+      xLabel: "시간(분)", yLabel: sensorLabel(first),
+      tooltip: { timeFormat: "mmss", valueLabel: sensorLabel(first), valueUnit: first.unit },
     });
-  };
-  select.addEventListener("change", draw);
-  await draw();
+  }
+
+  async function load() {
+    const version = ++request;
+    const next = await getDatasets(cls.id, Number(select.value));
+    if (!isCurrent() || version !== request) return;
+    datasets = next;
+    sensorSelect.replaceChildren();
+    const kinds = new Map(datasets.map((d) => [sensorKey(d), d]));
+    for (const [key, d] of kinds) {
+      const option = document.createElement("option");
+      option.value = key;
+      option.textContent = sensorLabel(d);
+      sensorSelect.append(option);
+    }
+    draw();
+  }
+  sensorSelect.addEventListener("change", draw);
+  select.addEventListener("change", () => {
+    const loading = load();
+    const version = request;
+    loading.catch(() => {
+      if (isCurrent() && version === request) chartWrap.textContent = "불러오지 못했어요. 새로고침해 주세요.";
+    });
+  });
+  await load();
 }
 
 // ── 3. 데이터 관리 ───────────────────────────────────────
 
 export async function renderManageTab(cls) {
+  const isCurrent = beginRender("manage");
   const el = document.getElementById("tab-manage");
   el.innerHTML = "";
 
@@ -193,7 +263,7 @@ export async function renderManageTab(cls) {
     btn.addEventListener("click", async () => {
       await setActiveExpField(cls.id, n);
       cls.activeExp = n;
-      await renderManageTab(cls);
+      if (isCurrent()) await renderManageTab(cls);
     });
     activeBox.append(btn);
   });
@@ -217,7 +287,7 @@ export async function renderManageTab(cls) {
         : getVisibleExps(cls).filter((v) => v !== n);
       await setVisibleExpsField(cls.id, next);
       cls.visibleExps = next;
-      await renderManageTab(cls);
+      if (isCurrent()) await renderManageTab(cls);
     });
     const text = document.createElement("span");
     text.textContent = `실험 ${n} · ${EXP_LABELS[n]}` + (n === 4 ? " (추가 실험 · 기본 꺼짐)" : "");
@@ -238,6 +308,7 @@ export async function renderManageTab(cls) {
   el.append(table);
 
   const all = (await Promise.all(EXP_NUMS.map((n) => getDatasets(cls.id, n)))).flat();
+  if (!isCurrent()) return;
   if (all.length === 0) {
     tbody.innerHTML = `<tr><td colspan="6">아직 측정된 데이터가 없어요.</td></tr>`;
     return;
@@ -246,9 +317,9 @@ export async function renderManageTab(cls) {
     const tr = document.createElement("tr");
     const when = d.startedAt?.toDate ? d.startedAt.toDate() : new Date(d.startedAt);
     tr.innerHTML = `
-      <td>실험 ${d.expNo}</td>
-      <td>${groupLabel(d.groupId)}</td>
-      <td>${d.title || "(제목 없음)"}</td>
+      <td>실험 ${escapeText(d.expNo)}</td>
+      <td>${escapeText(groupLabel(d.groupId))}</td>
+      <td>${escapeText(d.title || "(제목 없음)")}</td>
       <td>${isNaN(when) ? "—" : when.toLocaleString("ko-KR")}</td>
       <td>${d.points?.length ?? 0}</td>
       <td><button class="btn tiny ghost">삭제</button></td>
@@ -283,7 +354,7 @@ async function openTvView(cls) {
   view.className = "tv-view";
   view.innerHTML = `
     <button class="btn ghost tv-exit">닫기</button>
-    <h1>${cls.name || "우리 반"} · 지금 실험 ${cls.activeExp ?? "—"}</h1>
+    <h1>${escapeText(cls.name || "우리 반")} · 지금 실험 ${cls.activeExp ?? "—"}</h1>
     <div class="tv-grid"></div>
   `;
   document.body.append(view);
@@ -300,7 +371,7 @@ async function openTvView(cls) {
     grid.innerHTML = groupIds.length
       ? groupIds.map((gid) => `
         <div class="tv-card">
-          <div class="tv-group">${groupLabel(gid)}</div>
+          <div class="tv-group">${escapeText(groupLabel(gid))}</div>
           <div class="tv-count">${counts[gid]}</div>
           <div class="tv-label">번 측정했어요</div>
         </div>
@@ -314,6 +385,9 @@ async function openTvView(cls) {
     view.remove();
   }
 
-  await refresh();
-  tvTimer = setInterval(refresh, 30000); // 30초마다 갱신
+  const refreshSafely = () => refresh().catch(() => {
+    if (view.isConnected) view.querySelector(".tv-grid").textContent = "불러오지 못했어요. 잠시 뒤 다시 확인할게요.";
+  });
+  await refreshSafely();
+  if (view.isConnected) tvTimer = setInterval(refreshSafely, 30000); // 30초마다 갱신
 }

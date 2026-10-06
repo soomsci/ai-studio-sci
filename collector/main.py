@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import os
 import threading
+import uuid
+import math
 from datetime import datetime, timezone
 
 from flask import Flask, jsonify, render_template, request
@@ -29,8 +31,7 @@ app = Flask(__name__)
 # 0.5초여도 45분×0.5초=5,400점이라 아슬아슬하지만, 기본값 10초는 그대로 안전하다.
 MIN_INTERVAL_SEC = 0.5
 
-# ★ 안전장치 — §5.2 5,000점 한도의 90%에 닿으면 화면에 미리 알린다.
-# 측정이 끝난 뒤 업로드 시점에 조용히 거부당하는 것이 제일 나쁘다.
+# 4,500점에서 미리 알리고, 5,000점에서 모든 센서에 함께 종료 신호를 보낸다.
 NEAR_LIMIT_POINTS = int(uploader.MAX_POINTS * 0.9)
 
 
@@ -83,6 +84,15 @@ class _Session:
         self.started_at: datetime | None = None
         self.status = "idle"  # idle | measuring | stopped | uploaded | error
         self.uploaded = False
+        self.upload_datasets = None
+        self.upload_results = []
+        self.limit_reached = threading.Event()
+
+    def stop_at_limit(self) -> None:
+        # 센서 콜백에서는 기다리지 않고 모든 채널에 함께 종료 신호를 보낸다.
+        self.limit_reached.set()
+        for channel in self.channels:
+            channel.source.request_stop()
 
     def has_data(self) -> bool:
         if self.mode == "realtime":
@@ -135,7 +145,7 @@ def api_setup():
         interval_sec = float(data.get("intervalSec") or 10)
     except (TypeError, ValueError):
         return jsonify(ok=False, error="측정 간격이 올바르지 않습니다"), 400
-    if interval_sec < MIN_INTERVAL_SEC:
+    if not math.isfinite(interval_sec) or interval_sec < MIN_INTERVAL_SEC:
         return jsonify(ok=False, error=f"측정 간격은 {MIN_INTERVAL_SEC}초 이상이어야 해요"), 400
 
     try:
@@ -219,6 +229,7 @@ def api_add_channel():
             return jsonify(ok=False, error=str(exc)), 500
 
         channel.device_id = channel.source.device_id or device_id
+        channel.source.on_limit = SESSION.stop_at_limit
         SESSION.channels.append(channel)
         channels = [ch.to_dict() for ch in SESSION.channels]
 
@@ -264,10 +275,13 @@ def api_start():
                 interval_sec = float(data["intervalSec"])
             except (TypeError, ValueError):
                 return jsonify(ok=False, error="측정 간격이 올바르지 않습니다"), 400
-            if interval_sec < MIN_INTERVAL_SEC:
+            if not math.isfinite(interval_sec) or interval_sec < MIN_INTERVAL_SEC:
                 return jsonify(ok=False, error=f"측정 간격은 {MIN_INTERVAL_SEC}초 이상이어야 합니다"), 400
             SESSION.meta["interval_sec"] = interval_sec
+        if restart_mode == "continue" and (SESSION.upload_datasets is not None or SESSION.limit_reached.is_set()):
+            return jsonify(ok=False, error="업로드를 시도했거나 저장 한도에 도달한 측정은 새로 재기를 골라 주세요."), 409
         keep_existing = restart_mode == "continue"
+        SESSION.limit_reached.clear()
         started_sources = []
         try:
             if SESSION.mode == "realtime":
@@ -290,6 +304,9 @@ def api_start():
         if not keep_existing:
             SESSION.started_at = datetime.now(timezone.utc)
         SESSION.uploaded = False
+        if not keep_existing:
+            SESSION.upload_datasets = None
+            SESSION.upload_results = []
         SESSION.status = "measuring"
     return jsonify(ok=True)
 
@@ -323,9 +340,18 @@ def api_manual_point():
             value = float(data["value"])
         except (KeyError, TypeError, ValueError):
             return jsonify(ok=False, error="숫자 값을 입력하세요"), 400
-        SESSION.manual_source.add_point(value)
+        if SESSION.upload_datasets is not None:
+            return jsonify(ok=False, error="업로드를 시도한 측정은 새로 시작해 주세요."), 409
+        try:
+            SESSION.manual_source.add_point(value)
+        except (ValueError, RuntimeError) as exc:
+            return jsonify(ok=False, error=str(exc)), 400
         SESSION.status = "measuring"
-    return jsonify(ok=True)
+        if len(SESSION.manual_source.latest_points()) >= uploader.MAX_POINTS:
+            SESSION.limit_reached.set()
+            SESSION.status = "stopped"
+        limit_reached = SESSION.limit_reached.is_set()
+    return jsonify(ok=True, limitReached=limit_reached)
 
 
 @app.route("/api/csv-upload", methods=["POST"])
@@ -334,6 +360,8 @@ def api_csv_upload():
     with LOCK:
         if SESSION.mode != "manual" or SESSION.manual_source is None:
             return jsonify(ok=False, error="수동 입력 모드가 아닙니다"), 400
+        if SESSION.upload_datasets is not None:
+            return jsonify(ok=False, error="업로드를 시도한 측정은 새로 시작해 주세요."), 409
         file = request.files.get("file")
         if not file:
             return jsonify(ok=False, error="파일이 없습니다"), 400
@@ -344,7 +372,11 @@ def api_csv_upload():
         SESSION.started_at = SESSION.started_at or datetime.now(timezone.utc)
         SESSION.status = "measuring"
         count = len(SESSION.manual_source.latest_points())
-    return jsonify(ok=True, count=count)
+        SESSION.limit_reached.clear()
+        if count >= uploader.MAX_POINTS:
+            SESSION.limit_reached.set()
+            SESSION.status = "stopped"
+    return jsonify(ok=True, count=count, limitReached=SESSION.limit_reached.is_set())
 
 
 @app.route("/api/status")
@@ -364,16 +396,25 @@ def api_status():
                     except sensor.SensorConnectionError:
                         pass
                 SESSION.status = "error"
+            if SESSION.status == "measuring" and SESSION.limit_reached.is_set():
+                try:
+                    for channel in SESSION.channels:
+                        channel.source.stop()
+                    SESSION.status = "stopped"
+                except sensor.SensorConnectionError as exc:
+                    SESSION.status = "error"
+                    fatal_error = str(exc)
             channels = [ch.to_dict() for ch in SESSION.channels]
             return jsonify(
                 ok=True, status=SESSION.status, channels=channels,
                 hasData=SESSION.has_data(), uploaded=SESSION.uploaded,
-                error=fatal_error,
+                error=fatal_error, limitReached=SESSION.limit_reached.is_set(),
             )
         points = SESSION.manual_source.latest_points() if SESSION.manual_source else []
         return jsonify(
             ok=True, status=SESSION.status, points=points,
             nearLimit=len(points) >= NEAR_LIMIT_POINTS,
+            limitReached=SESSION.limit_reached.is_set(),
             hasData=bool(points), uploaded=SESSION.uploaded,
         )
 
@@ -458,65 +499,54 @@ def api_upload():
     학생과 똑같이 익명 로그인 뒤 그 자격으로 올린다(관리자 권한을 쓰지 않는다).
     채널이 여러 개면 로그인은 한 번만 하고 같은 토큰을 재사용한다."""
     with LOCK:
+        if SESSION.uploaded:
+            return jsonify(ok=True, results=SESSION.upload_results,
+                           datasetId=SESSION.upload_results[0]["datasetId"] if SESSION.upload_results else None)
         if SESSION.mode == "realtime" and SESSION.status == "measuring":
             return jsonify(ok=False, error="측정을 먼저 종료한 뒤 서버로 보내 주세요"), 409
-        meta = SESSION.meta
-
         try:
             config = uploader.load_config()
-        except uploader.UploadError as exc:
-            return jsonify(ok=False, error=str(exc)), 500
+            if SESSION.upload_datasets is None:
+                meta = SESSION.meta
+                if SESSION.mode == "realtime":
+                    candidates = [
+                        ({"deviceId": ch.device_id, "label": ch.label}, _build_dataset(
+                            meta, ch.title, ch.sensor_name, ch.source.unit,
+                            ch.source.latest_points(), ch.source.latest_events(), "sensor"))
+                        for ch in SESSION.channels
+                    ]
+                elif SESSION.manual_source is not None:
+                    candidates = [({}, _build_dataset(
+                        meta, meta.get("title") or SESSION.manual_sensor_name or "측정",
+                        SESSION.manual_sensor_name, SESSION.manual_source.unit,
+                        SESSION.manual_source.latest_points(), SESSION.manual_source.latest_events(), "manual"))]
+                else:
+                    candidates = []
+                if not candidates:
+                    return jsonify(ok=False, error="측정 데이터가 없습니다"), 400
+                for _, ds in candidates:
+                    uploader.validate(ds)
+                # 측정값과 문서 번호를 첫 전송 전에 고정한다. 부분 실패에도 그대로 재사용한다.
+                SESSION.upload_datasets = [(info, ds, uuid.uuid4().hex) for info, ds in candidates]
 
-        if SESSION.mode == "realtime":
-            if not SESSION.channels:
-                return jsonify(ok=False, error="측정 데이터가 없습니다"), 400
-            datasets = [
-                (
-                    ch,
-                    _build_dataset(
-                        meta, ch.title, ch.sensor_name, ch.source.unit,
-                        ch.source.latest_points(), ch.source.latest_events(), "sensor",
-                    ),
-                )
-                for ch in SESSION.channels
-            ]
-            try:
-                for _ch, ds in datasets:
-                    uploader.validate(ds)  # 하나라도 §5 스키마를 어기면 아무것도 올리지 않는다
-            except uploader.SchemaError as exc:
-                return jsonify(ok=False, error=str(exc)), 400
-
-            results = []
-            try:
-                id_token, local_id = uploader.sign_in_anonymously(config["apiKey"])
-                for ch, ds in datasets:
-                    dataset_id = uploader.upload_dataset(
-                        ds, config["apiKey"], config["projectId"], id_token, local_id
-                    )
-                    results.append({"deviceId": ch.device_id, "label": ch.label, "datasetId": dataset_id})
-            except uploader.UploadError as exc:
-                return jsonify(ok=False, error=str(exc)), 500
-            SESSION.uploaded = True
-            SESSION.status = "uploaded"
-            return jsonify(ok=True, results=results)
-
-        if SESSION.manual_source is None:
-            return jsonify(ok=False, error="측정 데이터가 없습니다"), 400
-        title = meta.get("title") or SESSION.manual_sensor_name or "측정"
-        ds = _build_dataset(
-            meta, title, SESSION.manual_sensor_name, SESSION.manual_source.unit,
-            SESSION.manual_source.latest_points(), SESSION.manual_source.latest_events(), "manual",
-        )
-        try:
-            dataset_id = uploader.upload_dataset(ds, config["apiKey"], config["projectId"])
+            id_token, local_id = uploader.sign_in_anonymously(config["apiKey"])
+            completed = {r["datasetId"] for r in SESSION.upload_results}
+            for info, ds, dataset_id in SESSION.upload_datasets:
+                if dataset_id in completed:
+                    continue
+                uploader.upload_dataset(ds, config["apiKey"], config["projectId"],
+                                        id_token, local_id, dataset_id=dataset_id)
+                SESSION.upload_results.append({**info, "datasetId": dataset_id})
         except uploader.SchemaError as exc:
             return jsonify(ok=False, error=str(exc)), 400
         except uploader.UploadError as exc:
-            return jsonify(ok=False, error=str(exc)), 500
+            return jsonify(ok=False, error=str(exc), results=SESSION.upload_results), 500
 
         SESSION.uploaded = True
         SESSION.status = "uploaded"
-    return jsonify(ok=True, datasetId=dataset_id)
+        return jsonify(ok=True, results=SESSION.upload_results,
+                       datasetId=SESSION.upload_results[0]["datasetId"])
+
 
 
 def main() -> None:

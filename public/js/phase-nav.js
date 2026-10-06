@@ -22,6 +22,8 @@
 //   goTo(id): 코드에서 직접 화면을 옮길 때 쓴다(예: "측정하러 가기" 버튼).
 //
 // SPEC §8.4-A: 잠긴 화면도 감추지 않는다. 칩은 그대로 보이되 누를 수 없게(disabled) 둔다.
+import { flushSaves } from "./save-state.js";
+
 export function renderPhases(containerEl, phases) {
   let current = 0;
 
@@ -88,9 +90,10 @@ export function renderPhases(containerEl, phases) {
     }
   }
 
-  function goTo(id) {
+  async function goTo(id) {
     const i = phases.findIndex((p) => p.id === id);
     if (i < 0 || locked(i)) return;
+    if (!await flushSaves() || !containerEl.isConnected) return;
     current = i;
     renderNav();
     renderBody();

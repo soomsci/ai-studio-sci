@@ -1,5 +1,5 @@
 # 설치: pip install -r requirements.txt  (Python 3.11 권장 — pasco 라이브러리 요구사항)
 flask>=3.0
-pasco>=1.0
+pasco==0.3.65
 requests>=2.31
-bleak>=0.21  # 2026-08-18: 표준 BLE 심박수(0x180D) 경로에서 직접 사용 — 이전엔 pasco의 숨은 의존성이었음
+bleak==0.20.2  # PASCO 0.3.65가 요구하는 버전. 표준 BLE 심박수 경로에서도 사용

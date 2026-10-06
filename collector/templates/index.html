@@ -433,7 +433,7 @@ $("btnManualAdd").addEventListener("click", async () => {
   const countEl = $("point-count2");
   countEl.textContent = Number(countEl.textContent) + 1;
   $("manualValue").value = "";
-  showMsg("값을 추가했어요.");
+  showMsg(result.limitReached ? "5,000개를 모아 입력을 멈췄어요. 서버로 보내 주세요." : "값을 추가했어요.");
   refreshManualChart();
 });
 
@@ -453,7 +453,7 @@ $("btnCsvUpload").addEventListener("click", async () => {
   const res = await fetch("/api/csv-upload", { method: "POST", body: formData });
   const result = await res.json();
   if (!result.ok) { showMsg(result.error, true); return; }
-  showMsg(`CSV에서 ${result.count}개 값을 읽었어요.`);
+  showMsg(`CSV에서 ${result.count}개 값을 읽었어요.` + (result.limitReached ? " 저장 한도에 도달했어요. 서버로 보내 주세요." : ""));
   refreshManualChart();
 });
 
@@ -461,7 +461,7 @@ $("btnCsvUpload").addEventListener("click", async () => {
 $("btnUpload").addEventListener("click", async () => {
   const result = await withBusy($("btnUpload"), "보내는 중…", () => postJson("/api/upload"), $("uploadSpinner"));
   if (!result.ok) { showMsg(result.error, true); return; }
-  if (result.results) {
+  if (mode === "realtime" && result.results) {
     const lines = result.results.map((r) => `${r.label}(${r.deviceId}) → ${r.datasetId}`);
     showMsg(`서버로 보냈어요!\n${lines.join("\n")}`);
   } else {

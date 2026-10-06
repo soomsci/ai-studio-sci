@@ -220,6 +220,21 @@ def _requests_module():
     return requests
 
 
+def _from_value(value):
+    """서버가 정규화한 숫자·시각·빈 배열도 같은 원본인지 비교한다."""
+    if "mapValue" in value:
+        return {k: _from_value(v) for k, v in value["mapValue"].get("fields", {}).items()}
+    if "arrayValue" in value:
+        return [_from_value(v) for v in value["arrayValue"].get("values", [])]
+    if "timestampValue" in value:
+        return datetime.fromisoformat(value["timestampValue"].replace("Z", "+00:00"))
+    if "integerValue" in value:
+        return int(value["integerValue"])
+    if "doubleValue" in value:
+        return float(value["doubleValue"])
+    return next(iter(value.values()))
+
+
 def _error_message(res) -> str:
     try:
         return res.json().get("error", {}).get("message", "")
@@ -324,6 +339,7 @@ def upload_dataset(
     project_id: str,
     id_token: str | None = None,
     local_id: str | None = None,
+    dataset_id: str | None = None,
 ) -> str:
     """실제 Firestore에 업로드한다. 반환값은 생성된 datasetId.
 
@@ -346,12 +362,30 @@ def upload_dataset(
     try:
         res = requests.post(
             url,
+            params={"documentId": dataset_id} if dataset_id else {},
             headers={"Authorization": f"Bearer {id_token}"},
             json={"fields": fields},
             timeout=15,
         )
     except requests.RequestException as exc:
         raise UploadError(f"서버에 연결하지 못했습니다. 인터넷 연결을 확인하세요. ({exc})") from exc
+
+    if res.status_code == 409 and dataset_id:
+        # 재로그인으로 UID가 달라져도 원본은 덮어쓰지 않는다.
+        try:
+            existing = requests.get(
+                f"{url}/{quote(dataset_id, safe='')}",
+                headers={"Authorization": f"Bearer {id_token}"}, timeout=15,
+            )
+        except requests.RequestException as exc:
+            raise UploadError("저장 결과를 확인하지 못했어요. 다시 시도하세요.") from exc
+        if existing.status_code != 200:
+            raise UploadError(_friendly_write_error(existing))
+        saved = existing.json().get("fields", {})
+        expected = {k: v for k, v in fields.items() if k not in ("ownerUid", "createdAt")}
+        if any(k not in saved or _from_value(saved[k]) != _from_value(v) for k, v in expected.items()):
+            raise UploadError("같은 번호에 다른 측정이 있어요. 원본을 바꾸지 않았어요.")
+        return dataset_id
 
     if res.status_code != 200:
         raise UploadError(_friendly_write_error(res))

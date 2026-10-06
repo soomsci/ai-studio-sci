@@ -1,3 +1,4 @@
+import { renderDatasetChoices, escapeText, fitSlope } from "./utils.js";
 // js/exp4.js — 실험 4 "물과 식용유, 어느 쪽이 빨리 뜨거워질까(비열)" 탭 (세션 B)
 //
 // 구조는 js/exp1.js와 같다. 실험 1과 다른 점만 적어 둔다.
@@ -38,7 +39,6 @@ export async function mount(containerEl) {
   slots = {};
   phaseSlots = {};
   phaseNav = null;
-  injectStyle();
 
   containerEl.innerHTML = `
     <p class="exp4-safety">🔥 <b>안전 먼저!</b> ${EXP4.safety}</p>
@@ -159,31 +159,9 @@ function pickedDatasets() {
 
 // ── ② 측정 목록 (체크박스) ────────────────────────────────
 function renderDatasetList(listEl) {
-  if (!datasets.length) {
-    listEl.innerHTML = `<p class="exp4-dim">아직 측정이 없어요. 아래에서 연습 데이터를 만들어 보세요.</p>`;
-    return;
-  }
-  listEl.innerHTML = datasets
-    .map((d) => {
-      const mins = Math.round((d.points.at(-1)?.t || 0) / 60);
-      const checked = analysis.datasetIds.includes(d.id) ? "checked" : "";
-      return `<label class="exp4-item">
-        <input type="checkbox" data-id="${d.id}" ${checked}>
-        <b>${d.title}</b>
-        <span class="exp4-dim">${d.condition} · ${mins}분 · ${d.points.length}개 점${d.source === "mock" ? " · 연습" : ""}</span>
-      </label>`;
-    })
-    .join("");
-
-  listEl.querySelectorAll("input[type=checkbox]").forEach((box) => {
-    box.addEventListener("change", () => {
-      const id = box.dataset.id;
-      analysis.datasetIds = box.checked
-        ? [...analysis.datasetIds, id]
-        : analysis.datasetIds.filter((x) => x !== id);
-      saveAnalysis(analysis);
-      refreshSlots(); // 열려 있는 단계의 그래프·표를 새로 그린다
-    });
+  renderDatasetChoices(listEl, {
+    datasets, analysis, prefix: "exp4",
+    onChange: () => { saveAnalysis(analysis); refreshSlots(); },
   });
 }
 
@@ -247,11 +225,11 @@ function renderStep1Info(slotEl) {
       const mins = Math.round((d.points.at(-1)?.t || 0) / 60);
       const evts = (d.events || []).map((e) => `${fmtTime(e.t)} ${e.label}`).join(", ") || "없음";
       return `<tr>
-        <td>${d.title}</td><td>${d.condition}</td>
-        <td>${mins}분</td><td>${d.intervalSec}초</td>
+        <td>${escapeText(d.title)}</td><td>${escapeText(d.condition)}</td>
+        <td>${mins}분</td><td>${escapeText(d.intervalSec)}초</td>
         <td>${d.points.length ? fmtV(d.points[0].v) : "값 없음"}</td>
         <td>${d.points.length ? fmtV(d.points.at(-1).v) : "값 없음"}</td>
-        <td>${evts}</td>
+        <td>${escapeText(evts)}</td>
       </tr>`;
     })
     .join("");
@@ -336,8 +314,8 @@ function renderStep3Chart(slotEl) {
   const rows = picked
     .map((d) => {
       const st = computeStats(d);
-      const cells = EXP4.stats.map((s) => `<td>${st[s.key] ?? "—"}</td>`).join("");
-      return `<tr><td>${d.title}</td>${cells}</tr>`;
+      const cells = EXP4.stats.map((s) => `<td>${escapeText(st[s.key] ?? "—")}</td>`).join("");
+      return `<tr><td>${escapeText(d.title)}</td>${cells}</tr>`;
     })
     .join("");
   statsEl.innerHTML = `<p class="exp4-help">자동 계산 — 내가 그래프에서 짚은 값과 비교해 보세요.</p>
@@ -429,18 +407,7 @@ function computeStats(ds) {
 }
 
 // 최소제곱법으로 기울기를 구한다 (단위: v/초). 점이 2개 미만이면 0.
-function fitSlope(pts) {
-  if (pts.length < 2) return 0;
-  const n = pts.length;
-  const mt = pts.reduce((s, p) => s + p.t, 0) / n;
-  const mv = pts.reduce((s, p) => s + p.v, 0) / n;
-  let num = 0, den = 0;
-  for (const p of pts) {
-    num += (p.t - mt) * (p.v - mv);
-    den += (p.t - mt) ** 2;
-  }
-  return den ? num / den : 0;
-}
+
 
 // 초 → "5분 00초" (툴팁과 같은 형식이라 학생이 대조하기 쉽다)
 function fmtTime(sec) {
@@ -460,28 +427,3 @@ function fmtV(v) {
 }
 
 // ── 이 탭에서만 쓰는 최소 스타일 ──────────────────────────
-function injectStyle() {
-  if (document.getElementById("exp4-style")) return;
-  const style = document.createElement("style");
-  style.id = "exp4-style";
-  style.textContent = `
-    .exp4-safety { background: #fff4e5; border: 1px solid #f5b878; border-left: 6px solid #f59e0b;
-                   border-radius: 8px; padding: 10px 14px; margin: 12px 0; line-height: 1.6; }
-    .exp4-header h2 { margin-bottom: 4px; }
-    .exp4-question { color: #444; }
-    .exp4-box { border: 1px solid #ddd; border-radius: 10px; padding: 12px 16px; margin: 12px 0; }
-    .exp4-help, .exp4-dim { color: #777; font-size: 14px; }
-    .exp4-note { color: #b45309; font-size: 14px; margin: 6px 0 0; }
-    .exp4-item { display: block; padding: 4px 0; cursor: pointer; }
-    .exp4-item input { margin-right: 6px; }
-    .exp4-practice { margin-top: 8px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-    .exp4-controls { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; margin: 8px 0; }
-    .exp4-chartbox { position: relative; height: 320px; margin: 8px 0; }
-    .exp4-table { border-collapse: collapse; font-size: 14px; margin: 8px 0; width: 100%; }
-    .exp4-table th, .exp4-table td { border: 1px solid #ddd; padding: 4px 8px; text-align: left; }
-    .exp4-table th { background: #f6f7f9; }
-    /* 화면(계획/측정/분석) 전환 UI 스타일은 css/style.css의 .phase-* 규칙을 쓴다 */
-    /* 사건 메모선 입력칸·목록 스타일은 js/annotations.js가 직접 넣는다 */
-  `;
-  document.head.append(style);
-}

@@ -27,15 +27,36 @@
 // spec.tooltip을 생략하면 축 이름과 기본 형식(mmss)으로 동작한다.
 
 const PALETTE = ["#2563eb", "#f59e0b", "#10b981", "#ef4444", "#8b5cf6", "#0ea5e9", "#f97316", "#14b8a6"];
-const charts = new WeakMap(); // 캔버스마다 기존 차트를 기억했다가 지우고 다시 그린다
+const charts = new Map(); // 캔버스를 지우거나 다시 그릴 때 기존 차트도 정리한다.
+const specs = new WeakMap(); // 실험 2처럼 같은 화면을 다시 붙일 때 사용할 설정.
+
+export function restoreCharts(root) {
+  for (const canvas of root.querySelectorAll("canvas")) {
+    const spec = specs.get(canvas);
+    if (spec && !charts.has(canvas)) renderChart(canvas, spec);
+  }
+}
+
+export function cleanupCharts() {
+  for (const [canvas, chart] of charts) {
+    if (!canvas.isConnected) { chart.destroy(); charts.delete(canvas); }
+  }
+}
+
+// 화면에서 캔버스를 없애는 모든 경로를 함께 정리한다.
+if (typeof MutationObserver !== "undefined") {
+  new MutationObserver(cleanupCharts).observe(document.documentElement, { childList: true, subtree: true });
+}
 
 export function renderChart(canvasEl, spec) {
+  cleanupCharts();
   if (typeof Chart === "undefined") {
     throw new Error("Chart.js가 로드되지 않았어요. index.html의 CDN 태그를 확인하세요.");
   }
   charts.get(canvasEl)?.destroy();
   const chart = new Chart(canvasEl, buildConfig(spec));
   charts.set(canvasEl, chart);
+  specs.set(canvasEl, spec);
   return chart;
 }
 

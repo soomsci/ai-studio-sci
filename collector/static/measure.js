@@ -27,9 +27,16 @@ function renderChannels(channels, status = currentMeasurementStatus) {
   channels.forEach((ch) => {
     const li = document.createElement("li");
     const value = ch.latestValue == null ? "" : `${ch.latestValue} ${ch.unit}`;
-    li.innerHTML = `<span class="num">${ch.deviceId}</span>${ch.label} — ${ch.title}` +
-      `<span class="count">${ch.count}개 모음</span>` +
-      `<span class="val">${value}</span>`;
+    const num = document.createElement("span");
+    num.className = "num";
+    num.textContent = ch.deviceId;
+    const count = document.createElement("span");
+    count.className = "count";
+    count.textContent = ch.count + "개 모음";
+    const val = document.createElement("span");
+    val.className = "val";
+    val.textContent = value;
+    li.append(num, document.createTextNode(ch.label + " — " + ch.title), count, val);
     if (ch.error) {
       const error = document.createElement("span");
       error.className = "count";
@@ -53,6 +60,7 @@ function pollStatus() {
     const data = await res.json();
     if (data.ok && data.channels) {
       renderChannels(data.channels, data.status);
+      if (data.limitReached) showMsg("저장할 수 있는 5,000개를 모아 측정을 멈췄어요. 서버로 보내 주세요.");
       if (data.error) {
         showMsg(`${data.error} 지금까지 모은 값은 서버로 보내거나 연결 해제할 수 있어요.`, true);
       }

@@ -18,6 +18,9 @@ import csv
 import io
 import time
 import threading
+import math
+
+from uploader import MAX_POINTS
 
 # ── pasco가 실시간 연결로 공식 지원하는 센서 (부록 A: PASCO Python 라이브러리) ──
 # 2026-08-18 실물 센서(CO2·조도·압력)로 확인 완료 — get_measurement_list()가
@@ -180,6 +183,8 @@ class PascoSensorSource:
         self._device = None
         self._points: list[dict] = []  # 저장(업로드)용 — 저장 간격마다 평균 1점만 남는다
         self._bucket: list[tuple[float, float]] = []  # (경과초, 원시값) — 화면용, 다음 저장 시점까지만 쌓인다
+        self._limit_stop = threading.Event()
+        self.on_limit = None
         self._events: list[dict] = []
         self._start_time: float | None = None
         self._stop_flag = threading.Event()
@@ -266,10 +271,13 @@ class PascoSensorSource:
             raise SensorConnectionError("이미 측정 중입니다")
         if not self.is_connected():
             raise SensorConnectionError("connect()를 먼저 호출해야 합니다")
+        if keep_existing and len(self._points) >= MAX_POINTS:
+            raise SensorConnectionError("저장 한도에 도달했어요. 새로 재기를 골라 주세요.")
         if not keep_existing:
             self._points = []
             self._events = []
         self._bucket = []
+        self._limit_stop.clear()
         self._last_error = None
         self._fatal_error = None
         last_t = self._points[-1]["t"] if keep_existing and self._points else 0
@@ -288,7 +296,7 @@ class PascoSensorSource:
         이러면 §5.2의 점 개수 한도를 그대로 지키면서도 그래프는 부드럽게 흐른다."""
         next_flush = time.monotonic() + interval_sec
         consecutive_errors = 0
-        while not self._stop_flag.is_set():
+        while not self._stop_flag.is_set() and not self._limit_stop.is_set():
             try:
                 value = self._device.read_data(self.measurement)  # 2026-08-18 실물 CO2로 확인
             except (
@@ -337,6 +345,13 @@ class PascoSensorSource:
         t = self._bucket[-1][0]
         self._points.append({"t": round(t, 1), "v": round(avg, 4)})
         self._bucket = []
+        if len(self._points) >= MAX_POINTS:
+            self.request_stop()
+            if self.on_limit:
+                self.on_limit()
+
+    def request_stop(self) -> None:
+        self._limit_stop.set()
 
     def record_event(self, label: str) -> None:
         if self._start_time is None:
@@ -483,6 +498,8 @@ class StandardBleHeartRateSource:
         self._client = None
         self._points: list[dict] = []
         self._bucket: list[tuple[float, float]] = []
+        self._limit_stop = threading.Event()
+        self.on_limit = None
         self._events: list[dict] = []
         self._start_time: float | None = None
         self._interval_sec: float = 10.0
@@ -549,10 +566,13 @@ class StandardBleHeartRateSource:
             raise SensorConnectionError("이미 측정 중입니다")
         if not self.is_connected():
             raise SensorConnectionError("connect()를 먼저 호출해야 합니다")
+        if keep_existing and len(self._points) >= MAX_POINTS:
+            raise SensorConnectionError("저장 한도에 도달했어요. 새로 재기를 골라 주세요.")
         if not keep_existing:
             self._points = []
             self._events = []
         self._bucket = []
+        self._limit_stop.clear()
         self._interval_sec = interval_sec
         self._last_error = None
         self._fatal_error = None
@@ -561,6 +581,8 @@ class StandardBleHeartRateSource:
         self._next_flush = time.monotonic() + interval_sec
 
         def handler(_sender, data: bytearray) -> None:
+            if self._limit_stop.is_set():
+                return
             try:
                 hr = self._parse_hr(data)
             except (IndexError, ValueError):
@@ -587,6 +609,13 @@ class StandardBleHeartRateSource:
         t = self._bucket[-1][0]
         self._points.append({"t": round(t, 1), "v": round(avg, 1)})
         self._bucket = []
+        if len(self._points) >= MAX_POINTS:
+            self.request_stop()
+            if self.on_limit:
+                self.on_limit()
+
+    def request_stop(self) -> None:
+        self._limit_stop.set()
 
     def record_event(self, label: str) -> None:
         if self._start_time is None:
@@ -656,6 +685,8 @@ class ManualInputSource:
         self._start_time: float | None = None
 
     def start(self, keep_existing: bool = False) -> None:
+        if keep_existing and len(self._points) >= MAX_POINTS:
+            raise SensorConnectionError("저장 한도에 도달했어요. 새로 재기를 골라 주세요.")
         if not keep_existing:
             self._points = []
             self._events = []
@@ -666,7 +697,11 @@ class ManualInputSource:
         """t를 안 주면 '지금'을 측정 시작 이후 경과 초로 계산한다."""
         if self._start_time is None:
             raise RuntimeError("start()를 먼저 호출해야 합니다")
+        if len(self._points) >= MAX_POINTS:
+            raise ValueError("저장할 수 있는 5,000개를 모았어요. 서버로 보내 주세요.")
         elapsed = t if t is not None else round(time.monotonic() - self._start_time, 1)
+        if not math.isfinite(value) or not math.isfinite(elapsed) or elapsed < 0 or (self._points and elapsed < self._points[-1]["t"]):
+            raise ValueError("시간과 값은 올바른 순서의 숫자여야 해요.")
         self._points.append({"t": elapsed, "v": value})
 
     def record_event(self, label: str) -> None:
@@ -685,7 +720,12 @@ class ManualInputSource:
             raise ValueError("CSV는 't,v' 두 열이 있어야 합니다 (첫 줄은 머리글)")
         points = []
         for row in reader:
-            points.append({"t": float(row["t"]), "v": float(row["v"])})
+            point = {"t": float(row["t"]), "v": float(row["v"])}
+            if len(points) >= MAX_POINTS:
+                raise ValueError("CSV는 측정값 5,000개까지 넣을 수 있어요. 기존 값은 그대로 남아 있어요.")
+            if not math.isfinite(point["t"]) or not math.isfinite(point["v"]) or point["t"] < 0 or (points and point["t"] < points[-1]["t"]):
+                raise ValueError("CSV의 시간과 값은 올바른 순서의 숫자여야 해요.")
+            points.append(point)
         self._points = points
         if self._start_time is None:
             self._start_time = time.monotonic()

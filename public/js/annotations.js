@@ -1,3 +1,4 @@
+import { escapeText } from "./utils.js";
 // js/annotations.js — 사건 메모선 입력칸 + 목록 (세션 A 공통)
 //
 // 학생이 그래프를 눌러 "그 시각에 무슨 일이 있었는지" 한 줄 메모를 남기는 기능.
@@ -145,9 +146,6 @@ export function mountAnnotations(hostEl, { analysis, onSave, onChange, placehold
 // ── 도우미 ──────────────────────────────────────────────
 
 // 학생이 쓴 글자를 화면에 넣기 전에 태그로 읽히지 않게 한다
-function escapeText(s) {
-  return String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
-}
 
 // 경과 초 → 사람이 읽는 "3분 20초" (raw-data.js·chart-kit 말풍선과 같은 형식)
 function formatTime(sec) {

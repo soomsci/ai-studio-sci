@@ -33,6 +33,7 @@
   <script type="module">
     // 본 화면 시동 (세션 A). 탭 등록·라우팅만 하고, 내용은 각 모듈이 담당한다.
     import { getSession, leave } from "./js/auth.js";
+    import { flushSaves } from "./js/save-state.js";
     import { getClassInfo } from "./js/data.js";
     import { registerTab, startRouter } from "./js/router.js";
     import { mount as mountHome } from "./js/home.js";
@@ -71,7 +72,7 @@
         leave();
         location.replace("./join.html?gone=1");
       } else {
-        if (classInfo && Array.isArray(classInfo.visibleExps) && classInfo.visibleExps.length) {
+        if (classInfo && Array.isArray(classInfo.visibleExps)) {
           visibleExps = classInfo.visibleExps;
         }
 
@@ -85,7 +86,8 @@
             .catch(() => { /* 담당 세션이 아직 안 만든 탭 */ });
         }
 
-        document.getElementById("leave-btn").addEventListener("click", () => {
+        document.getElementById("leave-btn").addEventListener("click", async () => {
+          if (!await flushSaves()) return;
           if (confirm("학급에서 나갈까요? 다시 들어오려면 학급 코드가 필요해요.")) {
             leave();
             location.href = "./join.html";
